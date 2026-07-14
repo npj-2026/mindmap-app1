@@ -310,46 +310,38 @@ export function autoLayout(snapshot: MindMapSnapshot, options: RightLayoutOption
   if (!root) return snapshot;
 
   const rootId = root.id;
-  const children = getChildren(nodes, rootId);
   const rootX = options.rootX ?? RIGHT_LAYOUT_ROOT_X;
   const rootY = options.rootY ?? RIGHT_LAYOUT_ROOT_Y;
-  const horizontalSpacing = options.horizontalSpacing ?? RIGHT_LAYOUT_HORIZONTAL_SPACING;
-  const verticalSpacing = options.verticalSpacing ?? RIGHT_LAYOUT_VERTICAL_SPACING;
+  const horizontalSpacing = options.horizontalSpacing ?? 88;
+  const verticalSpacing = options.verticalSpacing ?? 16;
+  const visibleIds = visibleNodeIds(nodes);
   root.x = rootX;
   root.y = rootY;
 
-  const subtreeSpan = new Map<string, number>();
-  measureSubtreeSpan(nodes, rootId, subtreeSpan);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const childrenByParent = new Map<string, MindNode[]>();
+  for (const node of nodes) {
+    if (!node.parentId || !visibleIds.has(node.id)) continue;
+    const parent = nodeById.get(node.parentId);
+    if (!parent || !visibleIds.has(parent.id)) continue;
+    const group = childrenByParent.get(node.parentId) ?? [];
+    group.push(node);
+    childrenByParent.set(node.parentId, group);
+  }
+  for (const group of childrenByParent.values()) {
+    group.sort((a, b) => a.y - b.y || a.createdAt - b.createdAt);
+  }
 
-  layoutRight(nodes, children, rightChildX(root, horizontalSpacing), root.y, subtreeSpan, {
-    horizontalSpacing,
-    verticalSpacing,
-  });
+  const layoutOptions = {
+    horizontalGap: clampLayoutGap(horizontalSpacing, 72, 96),
+    verticalGap: clampLayoutGap(verticalSpacing, 12, 20),
+  };
+  const subtreeHeights = new Map<string, number>();
+  measureTidySubtreeHeight(root, childrenByParent, subtreeHeights, layoutOptions.verticalGap);
+
+  layoutTidyChildren(root, childrenByParent, subtreeHeights, layoutOptions);
 
   return { ...snapshot, nodes };
-}
-
-function layoutRight(
-  nodes: MindNode[],
-  group: MindNode[],
-  anchorX: number,
-  anchorY: number,
-  subtreeSpan: Map<string, number>,
-  options: Required<Pick<RightLayoutOptions, "horizontalSpacing" | "verticalSpacing">>,
-) {
-  const totalSpan = group.reduce((total, node) => total + subtreeHeight(nodes, node, subtreeSpan, options.verticalSpacing), 0);
-  let cursorY = anchorY - Math.max(0, totalSpan - nodeHeightForLayout(group[0])) / 2;
-
-  group.forEach((node) => {
-    const spanHeight = subtreeHeight(nodes, node, subtreeSpan, options.verticalSpacing);
-    node.x = anchorX;
-    node.y = cursorY + Math.max(0, spanHeight - nodeHeightForLayout(node)) / 2;
-    const children = getChildren(nodes, node.id);
-    if (children.length) {
-      layoutRight(nodes, children, rightChildX(node, options.horizontalSpacing), node.y, subtreeSpan, options);
-    }
-    cursorY += spanHeight;
-  });
 }
 
 export function levelLabel(depth: number) {
@@ -362,29 +354,58 @@ export function levelLabel(depth: number) {
   return "項目";
 }
 
-function measureSubtreeSpan(nodes: MindNode[], nodeId: string, result: Map<string, number>): number {
-  const children = getChildren(nodes, nodeId);
-  if (!children.length) {
-    result.set(nodeId, 1);
-    return 1;
-  }
-  const span = children.reduce((total, child) => total + measureSubtreeSpan(nodes, child.id, result), 0);
-  result.set(nodeId, Math.max(1, span));
-  return Math.max(1, span);
-}
-
 function nodeHeightForLayout(node: MindNode) {
-  return Math.max(44, node.height || NODE_HEIGHT);
+  return Math.max(1, node.height || NODE_HEIGHT);
 }
 
-function subtreeHeight(
-  nodes: MindNode[],
+function measureTidySubtreeHeight(
   node: MindNode,
-  subtreeSpan: Map<string, number>,
-  verticalSpacing: number,
+  childrenByParent: Map<string, MindNode[]>,
+  result: Map<string, number>,
+  verticalGap: number,
 ) {
-  const leafCount = subtreeSpan.get(node.id) ?? 1;
-  return Math.max(nodeHeightForLayout(node), leafCount * Math.max(verticalSpacing, nodeHeightForLayout(node) + 18));
+  const children = childrenByParent.get(node.id) ?? [];
+  if (!children.length) {
+    const height = nodeHeightForLayout(node);
+    result.set(node.id, height);
+    return height;
+  }
+
+  const childrenHeight =
+    children.reduce((total, child) => total + measureTidySubtreeHeight(child, childrenByParent, result, verticalGap), 0) +
+    verticalGap * (children.length - 1);
+  const height = Math.max(nodeHeightForLayout(node), childrenHeight);
+  result.set(node.id, height);
+  return height;
+}
+
+function layoutTidyChildren(
+  parent: MindNode,
+  childrenByParent: Map<string, MindNode[]>,
+  subtreeHeights: Map<string, number>,
+  options: { horizontalGap: number; verticalGap: number },
+) {
+  const children = childrenByParent.get(parent.id) ?? [];
+  if (!children.length) return;
+
+  const parentCenterY = parent.y + nodeHeightForLayout(parent) / 2;
+  const childrenBlockHeight =
+    children.reduce((total, child) => total + (subtreeHeights.get(child.id) ?? nodeHeightForLayout(child)), 0) +
+    options.verticalGap * (children.length - 1);
+  let cursorY = parentCenterY - childrenBlockHeight / 2;
+  const childX = parent.x + parent.width + options.horizontalGap;
+
+  for (const child of children) {
+    const childSubtreeHeight = subtreeHeights.get(child.id) ?? nodeHeightForLayout(child);
+    child.x = childX;
+    child.y = cursorY + (childSubtreeHeight - nodeHeightForLayout(child)) / 2;
+    layoutTidyChildren(child, childrenByParent, subtreeHeights, options);
+    cursorY += childSubtreeHeight + options.verticalGap;
+  }
+}
+
+function clampLayoutGap(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
 
 export function hasLeftFacingNodes(nodes: MindNode[]) {

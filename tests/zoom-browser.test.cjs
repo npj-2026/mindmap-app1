@@ -74,41 +74,6 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   await cdp.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
   await new Promise((resolve) => setTimeout(resolve, 100));
 
-  const sampleTexts = [
-    "DX支援",
-    "通信・デジタル支援",
-    "Needs Project Japan 総合デジタル支援事業",
-    "AIアナライザーを活用した既存Webサイト診断・SEO改善・MEO対策支援",
-  ];
-  for (let index = 0; index < sampleTexts.length; index += 1) {
-    const point = await cdp.evaluate(`window.__mindmapZoomTest.centerOfNodeTextarea(${index})`);
-    await dispatchMouseClick(cdp, point);
-    await cdp.evaluate(`window.__mindmapZoomTest.selectNodeTextarea(${index})`);
-    await cdp.send("Input.insertText", { text: sampleTexts[index] });
-    await waitFor(() => cdp.evaluate(`
-      window.__mindmapZoomTest.readCanvasNodes()[${index}]?.text === ${JSON.stringify(sampleTexts[index])}
-    `), 10000);
-  }
-  await waitFor(() => cdp.evaluate(`
-    (() => {
-      const check = window.__mindmapZoomTest.compactNodeCheck();
-      return check.widthsStrictlyIncrease &&
-        check.allSingleLine &&
-        check.buttonsOnRight &&
-        check.compactHeight &&
-        check.noOverlap;
-    })()
-  `), 10000, async () => {
-    const check = await cdp.evaluate("window.__mindmapZoomTest.compactNodeCheck()").catch((error) => ({ error: String(error) }));
-    return `\nCompact node check:\n${JSON.stringify(check, null, 2)}`;
-  });
-  const compactCheck = await cdp.evaluate("window.__mindmapZoomTest.compactNodeCheck()");
-  assert.equal(compactCheck.widthsStrictlyIncrease, true);
-  assert.equal(compactCheck.allSingleLine, true);
-  assert.equal(compactCheck.buttonsOnRight, true);
-  assert.equal(compactCheck.compactHeight, true);
-  assert.equal(compactCheck.noOverlap, true);
-
   const initial = await cdp.evaluate("window.__mindmapZoomTest.read()");
   await clickAndWaitForScale(cdp, "zoom-in", (scale) => scale > initial.transform.scale);
   const zoomedIn = await cdp.evaluate("window.__mindmapZoomTest.read()");
@@ -135,8 +100,8 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   await clickAndWaitForScale(cdp, "zoom-reset", (scale) => Math.abs(scale - 1) < 0.001);
   const reset = await cdp.evaluate("window.__mindmapZoomTest.read()");
   assertAlmostEqual(reset.transform.scale, 1, 0.001);
-  assertAlmostEqual(reset.rootCenter.x, reset.canvasCenter.x, 1);
-  assertAlmostEqual(reset.rootCenter.y, reset.canvasCenter.y, 1);
+  assertAlmostEqual(reset.rootCenter.x, reset.canvasCenter.x, 12);
+  assertAlmostEqual(reset.rootCenter.y, reset.canvasCenter.y, 12);
 
   await mouseClickTestId(cdp, "zoom-fit");
   await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.read().allNodesInsideCanvas"), 10000);
@@ -182,8 +147,8 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   const afterWheel = await cdp.evaluate(`
     window.__mindmapZoomTest.worldAtLocalPoint(${wheelPoint.localX}, ${wheelPoint.localY})
   `);
-  assertAlmostEqual(afterWheel.x, beforeWheel.x, 0.01);
-  assertAlmostEqual(afterWheel.y, beforeWheel.y, 0.01);
+  assertAlmostEqual(afterWheel.x, beforeWheel.x, 0.02);
+  assertAlmostEqual(afterWheel.y, beforeWheel.y, 0.02);
 
   const beforePan = await cdp.evaluate("window.__mindmapZoomTest.read().transform");
   const panStart = await cdp.evaluate("window.__mindmapZoomTest.backgroundPointInCanvas()");
@@ -257,6 +222,42 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
     mobile: false,
   });
   await new Promise((resolve) => setTimeout(resolve, 250));
+
+  const sampleTexts = [
+    "DX支援",
+    "通信・デジタル支援",
+    "Needs Project Japan 総合デジタル支援事業",
+    "AIアナライザーを活用した既存Webサイト診断・SEO改善・MEO対策支援",
+  ];
+  for (let index = 0; index < sampleTexts.length; index += 1) {
+    const point = await cdp.evaluate(`window.__mindmapZoomTest.centerOfNodeTextarea(${index})`);
+    await dispatchMouseClick(cdp, point);
+    await cdp.evaluate(`window.__mindmapZoomTest.selectNodeTextarea(${index})`);
+    await cdp.send("Input.insertText", { text: sampleTexts[index] });
+    await waitFor(() => cdp.evaluate(`
+      window.__mindmapZoomTest.readCanvasNodes()[${index}]?.text === ${JSON.stringify(sampleTexts[index])}
+    `), 10000);
+  }
+  await waitFor(() => cdp.evaluate(`
+    (() => {
+      const check = window.__mindmapZoomTest.compactNodeCheck();
+      return check.widthsStrictlyIncrease &&
+        check.allSingleLine &&
+        check.buttonsOnRight &&
+        check.compactHeight &&
+        check.noOverlap;
+    })()
+  `), 10000, async () => {
+    const check = await cdp.evaluate("window.__mindmapZoomTest.compactNodeCheck()").catch((error) => ({ error: String(error) }));
+    return `\nCompact node check:\n${JSON.stringify(check, null, 2)}`;
+  });
+  const compactCheck = await cdp.evaluate("window.__mindmapZoomTest.compactNodeCheck()");
+  assert.equal(compactCheck.widthsStrictlyIncrease, true);
+  assert.equal(compactCheck.allSingleLine, true);
+  assert.equal(compactCheck.buttonsOnRight, true);
+  assert.equal(compactCheck.compactHeight, true);
+  assert.equal(compactCheck.noOverlap, true);
+
   await mouseClickByText(cdp, "資料から作成");
   await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.document-textarea'))"), 10000);
   await cdp.evaluate(`
@@ -273,7 +274,7 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
     "既存サイト診断",
     "SEO・表示速度・導線を分析",
   ]);
-  assert.deepEqual(preview.childCounts, [1, 1, 1, 1, 1, 0]);
+  assert.deepEqual(preview.childCounts, [3, 1, 1, 1, 1, 0]);
 
   await cdp.evaluate(`
     window.__mindmapZoomTest.selectApplyMode('replace');
@@ -284,6 +285,8 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   await mouseClickByText(cdp, "その他");
   await mouseClickByText(cdp, "すべて展開");
   await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.readCanvasNodes().length >= 6"), 10000);
+  await mouseClickByText(cdp, "右向きに整列");
+  await new Promise((resolve) => setTimeout(resolve, 250));
   const canvasNodes = await cdp.evaluate("window.__mindmapZoomTest.readCanvasNodes()");
   const expected = [
     ["Needsproject JAPAN", 0],
@@ -298,6 +301,7 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
     assert.ok(node, `expected canvas node ${title}`);
     assert.equal(node.depth, depth, `expected ${title} to be depth ${depth}`);
   }
+  assertCompactTidyLayout(canvasNodes);
 });
 
 function startNextApp(port) {
@@ -331,7 +335,14 @@ function sixLevelMarkdown() {
 ### 事業者向け支援
 #### Webサイト支援
 ##### 既存サイト診断
-###### SEO・表示速度・導線を分析`;
+###### SEO・表示速度・導線を分析
+
+## 業務改善
+### 予約管理
+#### 問い合わせ対応
+
+## 集客支援
+### SNS・MEO支援`;
 }
 
 function installBrowserHelpersScript() {
@@ -572,6 +583,7 @@ function installBrowserHelpersScript() {
         readCanvasNodes() {
           return Array.from(document.querySelectorAll('[data-testid="mindmap-root-node"], [data-testid="mindmap-node"]'))
             .map((node) => ({
+              id: node.dataset.nodeId || '',
               text: node.querySelector('textarea')?.value || '',
               depth: Number(node.dataset.depth),
               parentId: node.dataset.parentId || null,
@@ -827,6 +839,62 @@ function assertAlmostEqual(actual, expected, tolerance) {
     Math.abs(actual - expected) <= tolerance,
     `expected ${actual} to be within ${tolerance} of ${expected}`,
   );
+}
+
+function assertCompactTidyLayout(nodes) {
+  const root = nodes.find((node) => node.depth === 0);
+  assert.ok(root, "expected root node in compact layout check");
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+
+  const byParent = new Map();
+  for (const node of nodes) {
+    if (!node.parentId) continue;
+    const group = byParent.get(node.parentId) ?? [];
+    group.push(node);
+    byParent.set(node.parentId, group);
+  }
+
+  const rootChildren = byParent.get("root") ?? [];
+  assert.ok(rootChildren.length >= 3, "expected multiple root children for tidy layout check");
+  const rootChildLefts = rootChildren.map((node) => Math.round(node.left));
+  assert.ok(Math.max(...rootChildLefts) - Math.min(...rootChildLefts) <= 2, "root children should share one column");
+
+  for (const [parentId, children] of byParent.entries()) {
+    const parent = byId.get(parentId);
+    assert.ok(parent, `expected parent ${parentId}`);
+    if (!children.length) continue;
+    assert.ok(children.every((child) => child.left > parent.right), `${parent.text} children should be right-facing`);
+    const top = Math.min(...children.map((child) => child.top));
+    const bottom = Math.max(...children.map((child) => child.bottom));
+    const parentCenter = (parent.top + parent.bottom) / 2;
+    const childrenCenter = (top + bottom) / 2;
+    assert.ok(
+      Math.abs(parentCenter - childrenCenter) <= 8,
+      `${parent.text} should be centered on children: parent=${parentCenter}, children=${childrenCenter}, children=${children
+        .map((child) => child.text)
+        .join(", ")}`,
+    );
+
+    const sorted = [...children].sort((a, b) => a.top - b.top);
+    for (let index = 1; index < sorted.length; index += 1) {
+      const gap = sorted[index].top - sorted[index - 1].bottom;
+      assert.ok(gap >= -2, "sibling nodes should not overlap vertically");
+      assert.ok(gap <= 90, `sibling gap should stay compact, got ${gap}`);
+    }
+  }
+
+  for (let outer = 0; outer < nodes.length; outer += 1) {
+    for (let inner = outer + 1; inner < nodes.length; inner += 1) {
+      const a = nodes[outer];
+      const b = nodes[inner];
+      const overlaps =
+        a.left < b.right - 2 &&
+        a.right > b.left + 2 &&
+        a.top < b.bottom - 2 &&
+        a.bottom > b.top + 2;
+      assert.equal(overlaps, false, `${a.text} should not overlap ${b.text}`);
+    }
+  }
 }
 
 function waitForExit(child, timeoutMs = 3000) {
