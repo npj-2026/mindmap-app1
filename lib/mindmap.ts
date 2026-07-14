@@ -3,12 +3,12 @@ import { defaultNodeStyle, normalizeStyle } from "@/lib/stylePresets";
 import type { MindMapSnapshot, MindNode, NodeSourceReference, NodeStyle } from "@/types/mindmap";
 
 export const ROOT_NODE_ID = "root";
-export const NODE_WIDTH = 188;
-export const NODE_HEIGHT = 72;
+export const NODE_WIDTH = 120;
+export const NODE_HEIGHT = 44;
 export const RIGHT_LAYOUT_ROOT_X = 4100;
 export const RIGHT_LAYOUT_ROOT_Y = 4200;
 export const RIGHT_LAYOUT_HORIZONTAL_SPACING = 320;
-export const RIGHT_LAYOUT_VERTICAL_SPACING = 160;
+export const RIGHT_LAYOUT_VERTICAL_SPACING = 88;
 export const LOCAL_ORIGIN = "local-mindmap-change";
 export const SYSTEM_ORIGIN = "system-mindmap-change";
 
@@ -272,7 +272,7 @@ export function rightChildX(
   parent: Pick<MindNode, "x" | "width">,
   horizontalSpacing = RIGHT_LAYOUT_HORIZONTAL_SPACING,
 ) {
-  return parent.x + Math.max(horizontalSpacing, parent.width + 96);
+  return parent.x + parent.width + Math.max(96, horizontalSpacing * 0.42);
 }
 
 export function replaceYText(yText: Y.Text, nextValue: string) {
@@ -337,19 +337,18 @@ function layoutRight(
   subtreeSpan: Map<string, number>,
   options: Required<Pick<RightLayoutOptions, "horizontalSpacing" | "verticalSpacing">>,
 ) {
-  const spacingY = options.verticalSpacing;
-  const totalSpan = group.reduce((total, node) => total + (subtreeSpan.get(node.id) ?? 1), 0);
-  let cursorY = anchorY - ((Math.max(1, totalSpan) - 1) * spacingY) / 2;
+  const totalSpan = group.reduce((total, node) => total + subtreeHeight(nodes, node, subtreeSpan, options.verticalSpacing), 0);
+  let cursorY = anchorY - Math.max(0, totalSpan - nodeHeightForLayout(group[0])) / 2;
 
   group.forEach((node) => {
-    const span = subtreeSpan.get(node.id) ?? 1;
+    const spanHeight = subtreeHeight(nodes, node, subtreeSpan, options.verticalSpacing);
     node.x = anchorX;
-    node.y = cursorY + ((span - 1) * spacingY) / 2;
+    node.y = cursorY + Math.max(0, spanHeight - nodeHeightForLayout(node)) / 2;
     const children = getChildren(nodes, node.id);
     if (children.length) {
       layoutRight(nodes, children, rightChildX(node, options.horizontalSpacing), node.y, subtreeSpan, options);
     }
-    cursorY += span * spacingY;
+    cursorY += spanHeight;
   });
 }
 
@@ -372,6 +371,20 @@ function measureSubtreeSpan(nodes: MindNode[], nodeId: string, result: Map<strin
   const span = children.reduce((total, child) => total + measureSubtreeSpan(nodes, child.id, result), 0);
   result.set(nodeId, Math.max(1, span));
   return Math.max(1, span);
+}
+
+function nodeHeightForLayout(node: MindNode) {
+  return Math.max(44, node.height || NODE_HEIGHT);
+}
+
+function subtreeHeight(
+  nodes: MindNode[],
+  node: MindNode,
+  subtreeSpan: Map<string, number>,
+  verticalSpacing: number,
+) {
+  const leafCount = subtreeSpan.get(node.id) ?? 1;
+  return Math.max(nodeHeightForLayout(node), leafCount * Math.max(verticalSpacing, nodeHeightForLayout(node) + 18));
 }
 
 export function hasLeftFacingNodes(nodes: MindNode[]) {

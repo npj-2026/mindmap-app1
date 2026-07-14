@@ -181,7 +181,7 @@ const initialSnapshot: MindMapSnapshot = {
 const DEFAULT_BRANCH_COLOR = "#38bdf8";
 const RECENT_BRANCH_COLORS_KEY = "mindmap:recent-branch-colors";
 const INTERACTIVE_CANVAS_SELECTOR =
-  "button,input,textarea,select,a,[role='button'],.zoom-controls,.selection-panel,.toolbar,.more-popover,.document-modal";
+  "button,input,textarea,select,a,[role='button'],.zoom-controls,.selection-panel,.toolbar,.more-popover,.document-modal,.mind-node";
 
 export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMapAppProps) {
   const isTestMode = Boolean(testSnapshot);
@@ -220,6 +220,9 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
   const roomRef = useRef<LiveRoom | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const worldRef = useRef<HTMLDivElement | null>(null);
+  const nodeElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const textareaElementRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
+  const sizeMeasureFramesRef = useRef<Map<string, number>>(new Map());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const panRef = useRef<PanState | null>(null);
@@ -249,6 +252,52 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
   const branches = useMemo(
     () => visibleNodes.filter((node) => node.parentId && visibleIds.has(node.parentId)),
     [visibleNodes, visibleIds],
+  );
+
+  const syncNodeSizeFromDom = useCallback(
+    (nodeId: string, textareaOverride?: HTMLTextAreaElement | null) => {
+      if (typeof window === "undefined") return;
+      const existingFrame = sizeMeasureFramesRef.current.get(nodeId);
+      if (existingFrame !== undefined) {
+        window.cancelAnimationFrame(existingFrame);
+      }
+
+      const frame = window.requestAnimationFrame(() => {
+        sizeMeasureFramesRef.current.delete(nodeId);
+        const node = nodesById.get(nodeId);
+        if (!node || !normalizeStyle(node.style, node.color).autoSize) return;
+        const nodeElement = nodeElementRefs.current.get(nodeId);
+        const textarea = textareaOverride ?? textareaElementRefs.current.get(nodeId);
+        if (!nodeElement || !textarea || transform.scale <= 0) return;
+
+        textarea.style.width = "auto";
+        textarea.style.height = "auto";
+        const textSize = measureTextareaText(textarea);
+        const nextTextWidth = Math.max(80, Math.ceil(textSize.width) + 8);
+        const nextTextHeight = Math.max(24, Math.ceil(textSize.height));
+        textarea.style.width = `${nextTextWidth}px`;
+        textarea.style.height = `${nextTextHeight}px`;
+
+        const rect = nodeElement.getBoundingClientRect();
+        const nextWidth = Math.max(120, Math.ceil(rect.width / transform.scale));
+        const nextHeight = Math.max(44, Math.ceil(rect.height / transform.scale));
+        if (Math.abs(nextWidth - node.width) < 1 && Math.abs(nextHeight - node.height) < 1) return;
+
+        const doc = docRef.current;
+        if (!doc || !canEditRef.current) return;
+        doc.transact(() => {
+          const nodes = getNodesMap(doc);
+          const yNode = nodes.get(nodeId);
+          if (!yNode) return;
+          yNode.set("width", nextWidth);
+          yNode.set("height", nextHeight);
+          yNode.set("updatedAt", Date.now());
+          enforceRightSpacingAfterSizeChange(nodes, nodeId, node.x, nextWidth);
+        }, SYSTEM_ORIGIN);
+      });
+      sizeMeasureFramesRef.current.set(nodeId, frame);
+    },
+    [nodesById, transform.scale],
   );
 
   const liveblocksClient = useMemo(() => {
@@ -292,8 +341,22 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
       if (versionTimerRef.current) {
         window.clearTimeout(versionTimerRef.current);
       }
+      for (const frame of sizeMeasureFramesRef.current.values()) {
+        window.cancelAnimationFrame(frame);
+      }
+      sizeMeasureFramesRef.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isSynced || !visibleNodes.length) return;
+    const frame = window.requestAnimationFrame(() => {
+      for (const node of visibleNodes) {
+        syncNodeSizeFromDom(node.id);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isSynced, syncNodeSizeFromDom, visibleNodes]);
 
   useEffect(() => {
     if (isTestMode) {
@@ -1211,7 +1274,6 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
       return;
     }
 
-    if ((event.target as HTMLElement).closest(".mind-node")) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     panRef.current = {
       pointerId: event.pointerId,
@@ -1845,6 +1907,10 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
                   data-parent-id={node.parentId ?? ""}
                   data-depth={getDepth(snapshot.nodes, node.id)}
                   key={node.id}
+                  ref={(element) => {
+                    if (element) nodeElementRefs.current.set(node.id, element);
+                    else nodeElementRefs.current.delete(node.id);
+                  }}
                   style={
                     {
                       ...nodeOuterStyle(node),
@@ -1870,51 +1936,61 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
                     setToast("右側でノードを編集できます");
                   }}
                 >
-                  <div className="node-toolbar">
+                  <div className="node-content-row">
                     <span className="node-level">{levelLabel(getDepth(snapshot.nodes, node.id))}</span>
-                    <button
-                      type="button"
-                      className="quick-add"
+                    <textarea
+                      id={`node-text-${node.id}`}
+                      value={node.text}
                       disabled={!canEdit}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        selectNode(node.id);
-                        addChild(node);
+                      wrap="off"
+                      ref={(element) => {
+                        if (element) textareaElementRefs.current.set(node.id, element);
+                        else textareaElementRefs.current.delete(node.id);
                       }}
-                      aria-label="子ノードを追加"
-                    >
-                      <Plus size={15} />
-                    </button>
-                    {childCount ? (
+                      style={nodeTextStyle(nodeStyle)}
+                      onFocus={() => {
+                        selectNode(node.id);
+                        setEditingNodeId(node.id);
+                        syncNodeSizeFromDom(node.id);
+                      }}
+                      onBlur={() => setEditingNodeId((current) => (current === node.id ? null : current))}
+                      onChange={(event) => {
+                        updateText(node.id, event.target.value);
+                        syncNodeSizeFromDom(node.id, event.currentTarget);
+                      }}
+                      aria-label={`${levelLabel(getDepth(snapshot.nodes, node.id))}の文字`}
+                    />
+                    <div className="node-toolbar">
                       <button
                         type="button"
-                        className="collapse-button"
+                        className="quick-add"
                         disabled={!canEdit}
                         onClick={(event) => {
                           event.stopPropagation();
-                          applyCollapseChanges([{ id: node.id, collapsed: !node.collapsed }]);
+                          selectNode(node.id);
+                          addChild(node);
                         }}
-                        aria-label={node.collapsed ? "展開" : "折りたたみ"}
+                        aria-label="子ノードを追加"
                       >
-                        {node.collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
-                        {node.collapsed && hiddenCount ? <b>{hiddenCount}</b> : null}
+                        <Plus size={14} />
                       </button>
-                    ) : null}
+                      {childCount ? (
+                        <button
+                          type="button"
+                          className="collapse-button"
+                          disabled={!canEdit}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            applyCollapseChanges([{ id: node.id, collapsed: !node.collapsed }]);
+                          }}
+                          aria-label={node.collapsed ? "展開" : "折りたたみ"}
+                        >
+                          {node.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                          {node.collapsed && hiddenCount ? <b>{hiddenCount}</b> : null}
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
-                  <textarea
-                    id={`node-text-${node.id}`}
-                    value={node.text}
-                    disabled={!canEdit}
-                    rows={Math.max(2, Math.min(8, node.text.split("\n").length + 1))}
-                    style={nodeTextStyle(nodeStyle)}
-                    onFocus={() => {
-                      selectNode(node.id);
-                      setEditingNodeId(node.id);
-                    }}
-                    onBlur={() => setEditingNodeId((current) => (current === node.id ? null : current))}
-                    onChange={(event) => updateText(node.id, event.target.value)}
-                    aria-label={`${levelLabel(getDepth(snapshot.nodes, node.id))}の文字`}
-                  />
                   {remoteSelectors.length || remoteEditors.length ? (
                     <div className="remote-badges">
                       {[...remoteSelectors, ...remoteEditors].slice(0, 3).map((participant) => (
@@ -2221,6 +2297,73 @@ function readRecentBranchColors() {
   } catch {
     return [];
   }
+}
+
+function enforceRightSpacingAfterSizeChange(
+  nodes: Y.Map<Y.Map<unknown>>,
+  parentId: string,
+  parentX: number,
+  parentWidth: number,
+) {
+  const children = Array.from(nodes.values())
+    .map(readNode)
+    .filter((node) => node.parentId === parentId)
+    .sort((a, b) => a.y - b.y || a.createdAt - b.createdAt);
+  const minChildX = rightChildX({ x: parentX, width: parentWidth });
+
+  for (const child of children) {
+    let childX = child.x;
+    if (child.x < minChildX) {
+      const dx = minChildX - child.x;
+      shiftSubtreeX(nodes, child.id, dx);
+      childX += dx;
+    }
+    enforceRightSpacingAfterSizeChange(nodes, child.id, childX, child.width);
+  }
+}
+
+function shiftSubtreeX(nodes: Y.Map<Y.Map<unknown>>, nodeId: string, dx: number) {
+  const yNode = nodes.get(nodeId);
+  if (!yNode) return;
+  yNode.set("x", Number(yNode.get("x") ?? 0) + dx);
+  yNode.set("updatedAt", Date.now());
+  for (const child of Array.from(nodes.values()).map(readNode).filter((node) => node.parentId === nodeId)) {
+    shiftSubtreeX(nodes, child.id, dx);
+  }
+}
+
+function measureTextareaText(textarea: HTMLTextAreaElement) {
+  const ownerDocument = textarea.ownerDocument;
+  const view = ownerDocument.defaultView;
+  if (!view || !ownerDocument.body) {
+    return { width: textarea.scrollWidth, height: textarea.scrollHeight };
+  }
+  const computed = view.getComputedStyle(textarea);
+  const marker = ownerDocument.createElement("span");
+  marker.textContent = textarea.value || " ";
+  Object.assign(marker.style, {
+    position: "fixed",
+    left: "-10000px",
+    top: "-10000px",
+    display: "inline-block",
+    visibility: "hidden",
+    whiteSpace: "pre",
+    wordBreak: "keep-all",
+    overflowWrap: "normal",
+    fontFamily: computed.fontFamily,
+    fontSize: computed.fontSize,
+    fontWeight: computed.fontWeight,
+    fontStyle: computed.fontStyle,
+    lineHeight: computed.lineHeight,
+    letterSpacing: computed.letterSpacing,
+    textTransform: computed.textTransform,
+    padding: "0",
+    border: "0",
+  });
+  ownerDocument.body.appendChild(marker);
+  const rect = marker.getBoundingClientRect();
+  marker.remove();
+  return { width: rect.width, height: rect.height };
 }
 
 function saveRecentBranchColor(color: string, current: string[]) {

@@ -41,7 +41,7 @@ export const defaultNodeStyle: NodeStyle = {
   borderColor: "#2563eb",
   borderWidth: 2,
   borderOpacity: 1,
-  borderRadius: 18,
+  borderRadius: 8,
   borderTopWidth: 2,
   borderRightWidth: 2,
   borderBottomWidth: 2,
@@ -55,18 +55,18 @@ export const defaultNodeStyle: NodeStyle = {
   gradientDirection: "horizontal",
   shadowEnabled: true,
   shadowColor: "#0f172a",
-  shadowOpacity: 0.12,
-  shadowBlur: 16,
+  shadowOpacity: 0.08,
+  shadowBlur: 10,
   shadowX: 0,
-  shadowY: 8,
+  shadowY: 4,
   autoSize: true,
-  minWidth: 188,
-  minHeight: 72,
-  paddingTop: 14,
-  paddingRight: 16,
-  paddingBottom: 14,
-  paddingLeft: 16,
-  siblingSpacing: 130,
+  minWidth: 120,
+  minHeight: 44,
+  paddingTop: 8,
+  paddingRight: 10,
+  paddingBottom: 8,
+  paddingLeft: 10,
+  siblingSpacing: 82,
   emphasis: false,
 };
 
@@ -206,12 +206,12 @@ export function normalizeStyle(input?: Partial<NodeStyle>, legacyColor?: string)
   next.shadowOpacity = clampNumber(next.shadowOpacity, 0, 1);
   next.shadowBlur = clampNumber(next.shadowBlur, 0, 60);
   next.minWidth = clampNumber(next.minWidth, 96, 420);
-  next.minHeight = clampNumber(next.minHeight, 48, 280);
+  next.minHeight = clampNumber(next.minHeight, 36, 280);
   next.paddingTop = clampNumber(next.paddingTop, 4, 48);
   next.paddingRight = clampNumber(next.paddingRight, 4, 48);
   next.paddingBottom = clampNumber(next.paddingBottom, 4, 48);
   next.paddingLeft = clampNumber(next.paddingLeft, 4, 48);
-  next.siblingSpacing = clampNumber(next.siblingSpacing, 80, 260);
+  next.siblingSpacing = clampNumber(next.siblingSpacing, 52, 260);
   return next;
 }
 

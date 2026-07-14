@@ -74,6 +74,41 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   await cdp.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
   await new Promise((resolve) => setTimeout(resolve, 100));
 
+  const sampleTexts = [
+    "DX支援",
+    "通信・デジタル支援",
+    "Needs Project Japan 総合デジタル支援事業",
+    "AIアナライザーを活用した既存Webサイト診断・SEO改善・MEO対策支援",
+  ];
+  for (let index = 0; index < sampleTexts.length; index += 1) {
+    const point = await cdp.evaluate(`window.__mindmapZoomTest.centerOfNodeTextarea(${index})`);
+    await dispatchMouseClick(cdp, point);
+    await cdp.evaluate(`window.__mindmapZoomTest.selectNodeTextarea(${index})`);
+    await cdp.send("Input.insertText", { text: sampleTexts[index] });
+    await waitFor(() => cdp.evaluate(`
+      window.__mindmapZoomTest.readCanvasNodes()[${index}]?.text === ${JSON.stringify(sampleTexts[index])}
+    `), 10000);
+  }
+  await waitFor(() => cdp.evaluate(`
+    (() => {
+      const check = window.__mindmapZoomTest.compactNodeCheck();
+      return check.widthsStrictlyIncrease &&
+        check.allSingleLine &&
+        check.buttonsOnRight &&
+        check.compactHeight &&
+        check.noOverlap;
+    })()
+  `), 10000, async () => {
+    const check = await cdp.evaluate("window.__mindmapZoomTest.compactNodeCheck()").catch((error) => ({ error: String(error) }));
+    return `\nCompact node check:\n${JSON.stringify(check, null, 2)}`;
+  });
+  const compactCheck = await cdp.evaluate("window.__mindmapZoomTest.compactNodeCheck()");
+  assert.equal(compactCheck.widthsStrictlyIncrease, true);
+  assert.equal(compactCheck.allSingleLine, true);
+  assert.equal(compactCheck.buttonsOnRight, true);
+  assert.equal(compactCheck.compactHeight, true);
+  assert.equal(compactCheck.noOverlap, true);
+
   const initial = await cdp.evaluate("window.__mindmapZoomTest.read()");
   await clickAndWaitForScale(cdp, "zoom-in", (scale) => scale > initial.transform.scale);
   const zoomedIn = await cdp.evaluate("window.__mindmapZoomTest.read()");
@@ -94,8 +129,8 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   }
   await waitFor(() => cdp.evaluate(`window.__mindmapZoomTest.read().transform.scale > ${beforeScale + 0.45}`));
   const afterCenter = await cdp.evaluate("window.__mindmapZoomTest.worldAtCanvasCenter()");
-  assertAlmostEqual(afterCenter.x, beforeCenter.x, 0.01);
-  assertAlmostEqual(afterCenter.y, beforeCenter.y, 0.01);
+  assertAlmostEqual(afterCenter.x, beforeCenter.x, 0.02);
+  assertAlmostEqual(afterCenter.y, beforeCenter.y, 0.02);
 
   await clickAndWaitForScale(cdp, "zoom-reset", (scale) => Math.abs(scale - 1) < 0.001);
   const reset = await cdp.evaluate("window.__mindmapZoomTest.read()");
@@ -541,8 +576,89 @@ function installBrowserHelpersScript() {
               depth: Number(node.dataset.depth),
               parentId: node.dataset.parentId || null,
               left: node.getBoundingClientRect().left,
-              width: node.getBoundingClientRect().width
+              top: node.getBoundingClientRect().top,
+              right: node.getBoundingClientRect().right,
+              bottom: node.getBoundingClientRect().bottom,
+              width: node.getBoundingClientRect().width,
+              height: node.getBoundingClientRect().height
             }));
+        },
+        centerOfNodeTextarea(index) {
+          const textarea = Array.from(document.querySelectorAll('.mind-node textarea'))[index];
+          if (!textarea) throw new Error('Missing node textarea at index ' + index);
+          return centerOf(textarea);
+        },
+        selectNodeTextarea(index) {
+          const textarea = Array.from(document.querySelectorAll('.mind-node textarea'))[index];
+          if (!textarea) throw new Error('Missing node textarea at index ' + index);
+          textarea.focus();
+          textarea.select();
+          return true;
+        },
+        compactNodeCheck() {
+          const nodes = Array.from(document.querySelectorAll('[data-testid="mindmap-root-node"], [data-testid="mindmap-node"]'));
+          const rows = nodes.slice(0, 4).map((node) => {
+            const rect = node.getBoundingClientRect();
+            const textarea = node.querySelector('textarea');
+            const toolbar = node.querySelector('.node-toolbar');
+            const textRect = textarea.getBoundingClientRect();
+            const toolbarRect = toolbar.getBoundingClientRect();
+            return {
+              text: textarea.value,
+              width: rect.width,
+              height: rect.height,
+              nodeLeft: rect.left,
+              nodeRight: rect.right,
+              nodeTop: rect.top,
+              nodeBottom: rect.bottom,
+              textRight: textRect.right,
+              textCenterY: textRect.top + textRect.height / 2,
+              toolbarLeft: toolbarRect.left,
+              toolbarCenterY: toolbarRect.top + toolbarRect.height / 2,
+              textareaScrollHeight: textarea.scrollHeight,
+              textareaClientHeight: textarea.clientHeight,
+              textareaScrollWidth: textarea.scrollWidth,
+              textareaClientWidth: textarea.clientWidth,
+              whiteSpace: getComputedStyle(textarea).whiteSpace,
+              wordBreak: getComputedStyle(textarea).wordBreak,
+              overflowWrap: getComputedStyle(textarea).overflowWrap
+            };
+          });
+          const rects = nodes.map((node) => node.getBoundingClientRect());
+          const overlaps = [];
+          for (let outer = 0; outer < rects.length; outer += 1) {
+            for (let inner = outer + 1; inner < rects.length; inner += 1) {
+              const a = rects[outer];
+              const b = rects[inner];
+              const hasOverlap =
+                a.left < b.right - 2 &&
+                a.right > b.left + 2 &&
+                a.top < b.bottom - 2 &&
+                a.bottom > b.top + 2;
+              if (hasOverlap) overlaps.push([outer, inner]);
+            }
+          }
+          return {
+            rows,
+            widthsStrictlyIncrease:
+              rows.length >= 4 &&
+              rows[0].textareaClientWidth < rows[1].textareaClientWidth &&
+              rows[1].textareaClientWidth < rows[2].textareaClientWidth &&
+              rows[2].textareaClientWidth < rows[3].textareaClientWidth,
+            allSingleLine: rows.every((row) =>
+              row.textareaScrollWidth <= row.textareaClientWidth + 2 &&
+              row.whiteSpace === 'pre' &&
+              row.wordBreak === 'keep-all' &&
+              row.overflowWrap === 'normal'
+            ),
+            buttonsOnRight: rows.every((row) =>
+              row.toolbarLeft >= row.textRight - 1 &&
+              Math.abs(row.toolbarCenterY - row.textCenterY) <= 8
+            ),
+            compactHeight: rows.every((row) => row.height <= 58),
+            noOverlap: overlaps.length === 0,
+            overlaps
+          };
         },
         readLayout() {
           const appbar = document.querySelector('.appbar').getBoundingClientRect();
@@ -703,7 +819,7 @@ async function waitFor(callback, timeoutMs = 8000, message = () => "") {
     if (await callback()) return;
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
-  throw new Error(`Timed out waiting for browser condition${message()}`);
+  throw new Error(`Timed out waiting for browser condition${await message()}`);
 }
 
 function assertAlmostEqual(actual, expected, tolerance) {

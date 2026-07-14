@@ -4,21 +4,26 @@ import { normalizeStyle } from "@/lib/stylePresets";
 
 export function nodeOuterStyle(node: MindNode): CSSProperties {
   const style = normalizeStyle(node.style, node.color);
+  const autoSize = style.autoSize;
+  const paddingTop = autoSize ? Math.min(style.paddingTop, 8) : style.paddingTop;
+  const paddingRight = autoSize ? Math.min(style.paddingRight, 10) : style.paddingRight;
+  const paddingBottom = autoSize ? Math.min(style.paddingBottom, 8) : style.paddingBottom;
+  const paddingLeft = autoSize ? Math.min(style.paddingLeft, 10) : style.paddingLeft;
   return {
     left: node.x,
     top: node.y,
-    width: style.autoSize ? "auto" : node.width,
-    minWidth: style.minWidth,
-    minHeight: style.minHeight,
+    width: autoSize ? "max-content" : node.width,
+    minWidth: autoSize ? Math.min(style.minWidth, 120) : style.minWidth,
+    minHeight: autoSize ? Math.min(style.minHeight, 44) : style.minHeight,
     borderColor: hexToRgba(style.borderColor, style.borderOpacity),
     borderStyle: borderCssStyle(style.borderStyle),
     borderWidth: borderWidth(style),
-    borderRadius: radiusForShape(style.shape, style.borderRadius),
+    borderRadius: radiusForShape(style.shape, autoSize ? Math.min(style.borderRadius, 10) : style.borderRadius),
     background: backgroundCss(style),
     opacity: 1,
     boxShadow: shadowCss(style),
     clipPath: clipPathForShape(style.shape),
-    padding: `${style.paddingTop}px ${style.paddingRight}px ${style.paddingBottom}px ${style.paddingLeft}px`,
+    padding: `${paddingTop}px ${paddingRight}px ${paddingBottom}px ${paddingLeft}px`,
   };
 }
 
@@ -36,6 +41,9 @@ export function nodeTextStyle(style: NodeStyle): CSSProperties {
     textAlign: normalized.textAlign,
     lineHeight: normalized.lineHeight,
     letterSpacing: normalized.letterSpacing,
+    whiteSpace: "pre",
+    wordBreak: "keep-all",
+    overflowWrap: "normal",
     writingMode: normalized.writingMode === "vertical" ? "vertical-rl" : "horizontal-tb",
     textTransform: normalized.textTransform === "none" ? "none" : normalized.textTransform,
   };
