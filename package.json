@@ -1,0 +1,32 @@
+{
+  "name": "collaborative-mindmap",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@liveblocks/client": "^3.8.0",
+    "@liveblocks/node": "^3.8.0",
+    "@liveblocks/yjs": "^3.8.0",
+    "html-to-image": "^1.11.13",
+    "jspdf": "^3.0.1",
+    "lucide-react": "^0.468.0",
+    "next": "^15.4.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "yjs": "^13.6.27"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "eslint": "^9.19.0",
+    "eslint-config-next": "^15.4.2",
+    "typescript": "^5.7.3"
+  }
+}
