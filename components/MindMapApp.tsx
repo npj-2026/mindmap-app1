@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { createClient } from "@liveblocks/client";
 import { getYjsProviderForRoom } from "@liveblocks/yjs";
 import * as Y from "yjs";
@@ -355,6 +356,14 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     roomRef.current?.updatePresence({ selectedNodeId, editingNodeId });
   }, [selectedNodeId, editingNodeId]);
 
+  const selectNode = useCallback((nodeId: string, additive = false) => {
+    setSelectedNodeId(nodeId);
+    setSelectedNodeIds((current) => {
+      if (!additive) return [nodeId];
+      return current.includes(nodeId) ? current.filter((id) => id !== nodeId) : [...current, nodeId];
+    });
+  }, []);
+
   useEffect(() => {
     if (!snapshot.nodes.length) return;
     const ids = new Set(snapshot.nodes.map((node) => node.id));
@@ -405,14 +414,6 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     },
     [transact],
   );
-
-  const selectNode = useCallback((nodeId: string, additive = false) => {
-    setSelectedNodeId(nodeId);
-    setSelectedNodeIds((current) => {
-      if (!additive) return [nodeId];
-      return current.includes(nodeId) ? current.filter((id) => id !== nodeId) : [...current, nodeId];
-    });
-  }, []);
 
   const patchSelectedStyles = useCallback(
     (patch: Partial<NodeStyle>) => {
@@ -1100,10 +1101,12 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
                     remoteEditors.length ? "remote-editing" : remoteSelectors.length ? "remote-selected" : ""
                   }`}
                   key={node.id}
-                  style={{
-                    ...nodeOuterStyle(node),
-                    ["--remote-color" as string]: remoteEditors[0]?.color ?? remoteSelectors[0]?.color ?? node.color,
-                  }}
+                  style={
+                    {
+                      ...nodeOuterStyle(node),
+                      "--remote-color": remoteEditors[0]?.color ?? remoteSelectors[0]?.color ?? node.color,
+                    } as CSSProperties
+                  }
                   onPointerDown={(event) => startNodeDrag(event, node)}
                   onPointerMove={moveNodeDrag}
                   onPointerUp={endNodeDrag}
