@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import {
-  accessForToken,
   getLiveblocks,
   isAdminToken,
   isMindMapRoom,
@@ -17,7 +16,6 @@ type RouteContext = {
 type DeleteMapBody = {
   ownerToken?: string;
   adminToken?: string;
-  editToken?: string;
 };
 
 function liveblocksStatus(error: unknown) {
@@ -69,13 +67,10 @@ export async function DELETE(request: Request, context: RouteContext) {
     const metadata = (room.metadata ?? {}) as MindMapRoomMetadata;
     const ownerToken = stringValue(body.ownerToken);
     const adminToken = stringValue(body.adminToken);
-    const editToken = stringValue(body.editToken);
-    const hasOwnerToken = Boolean(metadata.ownerTokenHash);
     const isOwner = isOwnerToken(metadata, ownerToken);
     const isAdmin = isAdminToken(adminToken);
-    const isLegacyOwner = !hasOwnerToken && accessForToken(metadata, editToken) === "edit";
 
-    if (!isOwner && !isAdmin && !isLegacyOwner) {
+    if (!isOwner && !isAdmin) {
       return NextResponse.json(
         { error: "forbidden", message: "このマップを削除する権限がありません。" },
         { status: 403, headers: { "Cache-Control": "no-store" } },

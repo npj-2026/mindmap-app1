@@ -5,11 +5,16 @@ import {
   AlertTriangle,
   ArrowRight,
   Copy,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileText,
+  LogOut,
   Loader2,
   MoreHorizontal,
   Plus,
+  Settings,
+  ShieldCheck,
   Trash2,
   UserRound,
   X,
@@ -48,18 +53,13 @@ type DeleteMapResponse = {
   error?: string;
 };
 
+type AdminVerifyResponse = {
+  ok?: boolean;
+  message?: string;
+};
+
 function normalizeMapName(value: string) {
   return value.trim().normalize("NFKC");
-}
-
-function tokenFromUrl(url?: string) {
-  if (!url) return "";
-  try {
-    const baseUrl = typeof window === "undefined" ? "http://localhost" : window.location.origin;
-    return new URL(url, baseUrl).searchParams.get("token") ?? "";
-  } catch {
-    return "";
-  }
 }
 
 export function HomePage() {
@@ -76,6 +76,12 @@ export function HomePage() {
   const [deleteError, setDeleteError] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDocumentImportOpen, setIsDocumentImportOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAdminDialogOpen, setIsAdminDialogOpen] = useState(false);
+  const [adminTokenInput, setAdminTokenInput] = useState("");
+  const [adminTokenError, setAdminTokenError] = useState("");
+  const [showAdminToken, setShowAdminToken] = useState(false);
+  const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(false);
 
   useEffect(() => {
     setName(getUserName());
@@ -89,6 +95,7 @@ export function HomePage() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  const isAdminMode = Boolean(adminTokenValue.trim());
   const currentDeleteTarget = deleteTarget;
   const normalizedDeleteInput = normalizeMapName(deleteConfirmName);
   const normalizedDeleteName = currentDeleteTarget ? normalizeMapName(currentDeleteTarget.title) : "";
@@ -97,11 +104,7 @@ export function HomePage() {
     normalizedDeleteInput.length > 0 &&
     normalizedDeleteInput === normalizedDeleteName;
   const hasDeleteCredential = currentDeleteTarget
-    ? Boolean(
-        currentDeleteTarget.ownerToken ||
-          adminTokenValue.trim() ||
-          tokenFromUrl(currentDeleteTarget.editUrl),
-      )
+    ? Boolean(currentDeleteTarget.ownerToken || isAdminMode)
     : false;
   const deleteDisabledReason = !currentDeleteTarget
     ? ""
@@ -138,11 +141,6 @@ export function HomePage() {
     }
   }
 
-  function updateAdminToken(value: string) {
-    setAdminTokenValue(value);
-    setAdminToken(value);
-  }
-
   function openDeleteDialog(map: RecentMap) {
     setDeleteTarget(map);
     setDeleteConfirmName("");
@@ -172,8 +170,7 @@ export function HomePage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ownerToken: currentDeleteTarget.ownerToken ?? "",
-            adminToken: adminTokenValue.trim(),
-            editToken: tokenFromUrl(currentDeleteTarget.editUrl),
+            adminToken: isAdminMode ? adminTokenValue.trim() : "",
           }),
         },
       );
@@ -195,6 +192,55 @@ export function HomePage() {
     } finally {
       setIsDeleting(false);
     }
+  }
+
+  function openAdminDialog() {
+    setAdminTokenInput("");
+    setAdminTokenError("");
+    setShowAdminToken(false);
+    setIsSettingsOpen(false);
+    setIsAdminDialogOpen(true);
+  }
+
+  async function verifyAdminToken() {
+    const token = adminTokenInput.trim();
+    if (!token) {
+      setAdminTokenError("管理者トークンを入力してください");
+      return;
+    }
+
+    setIsVerifyingAdmin(true);
+    setAdminTokenError("");
+    try {
+      const response = await fetch("/api/admin/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminToken: token }),
+      });
+      const data = (await response.json().catch(() => ({}))) as AdminVerifyResponse;
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || "管理者トークンが正しくありません");
+      }
+      setAdminTokenValue(token);
+      setAdminToken(token);
+      setAdminTokenInput("");
+      setIsAdminDialogOpen(false);
+      setNotice("管理者モードを有効にしました");
+    } catch (caught) {
+      setAdminTokenError(
+        caught instanceof Error ? caught.message : "管理者トークンが正しくありません",
+      );
+    } finally {
+      setIsVerifyingAdmin(false);
+    }
+  }
+
+  function exitAdminMode() {
+    setAdminTokenValue("");
+    setAdminToken("");
+    setAdminTokenInput("");
+    setIsSettingsOpen(false);
+    setNotice("管理者モードを終了しました");
   }
 
   async function createMapFromDocument(map: GeneratedMindMap, mode: DocumentGenerationApplyMode) {
@@ -221,7 +267,41 @@ export function HomePage() {
           <div className="brand-icon">M</div>
           <span>みんなのマインドマップ</span>
         </div>
-        <ThemeToggle />
+        <div className="home-topbar-actions">
+          {isAdminMode ? (
+            <span className="admin-mode-pill">
+              <ShieldCheck size={15} />
+              管理者モード中
+            </span>
+          ) : null}
+          <ThemeToggle />
+          <div className="settings-menu-wrap">
+            <button
+              type="button"
+              className="settings-button"
+              aria-label="設定メニュー"
+              aria-expanded={isSettingsOpen}
+              onClick={() => setIsSettingsOpen((current) => !current)}
+            >
+              <Settings size={18} />
+            </button>
+            {isSettingsOpen ? (
+              <div className="settings-menu">
+                {isAdminMode ? (
+                  <button type="button" onClick={exitAdminMode}>
+                    <LogOut size={16} />
+                    管理者モードを終了
+                  </button>
+                ) : (
+                  <button type="button" onClick={openAdminDialog}>
+                    <ShieldCheck size={16} />
+                    管理者モード
+                  </button>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </header>
       <section className="home-hero">
         <div className="home-copy">
@@ -262,16 +342,6 @@ export function HomePage() {
             <h2>最近開いたマップ</h2>
             <p>作成したマップは「...」メニューから削除できます。</p>
           </div>
-          <label className="admin-token-mini">
-            <span>管理者トークン</span>
-            <input
-              type="password"
-              value={adminTokenValue}
-              onChange={(event) => updateAdminToken(event.target.value)}
-              placeholder="管理者だけ入力"
-              autoComplete="off"
-            />
-          </label>
         </div>
         {recentMaps.length ? (
           <div className="recent-grid">
@@ -300,12 +370,12 @@ export function HomePage() {
                           type="button"
                           className="delete-map-menu-button"
                           onClick={() => openDeleteDialog(map)}
-                          disabled={!map.ownerToken && !adminTokenValue.trim() && !tokenFromUrl(map.editUrl)}
+                          disabled={!map.ownerToken && !isAdminMode}
                         >
                           <Trash2 size={16} />
                           マップを削除
                         </button>
-                        {!map.ownerToken && !adminTokenValue.trim() && !tokenFromUrl(map.editUrl) ? (
+                        {!map.ownerToken && !isAdminMode ? (
                           <p className="menu-disabled-reason">
                             このマップを削除する権限がありません。
                           </p>
@@ -406,6 +476,68 @@ export function HomePage() {
             {deleteDisabledReason ? (
               <p className="delete-disabled-reason">{deleteDisabledReason}</p>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+      {isAdminDialogOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <div className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-title">
+            <div className="modal-head">
+              <div>
+                <h2 id="admin-title">管理者モード</h2>
+                <p>管理者用の操作が必要な場合だけ入力してください。</p>
+              </div>
+              <button
+                type="button"
+                className="icon-only"
+                aria-label="管理者モードを閉じる"
+                onClick={() => setIsAdminDialogOpen(false)}
+                disabled={isVerifyingAdmin}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <label className="admin-token-dialog-field">
+              <span>トークン</span>
+              <div className="password-row">
+                <input
+                  type={showAdminToken ? "text" : "password"}
+                  value={adminTokenInput}
+                  onChange={(event) => setAdminTokenInput(event.target.value)}
+                  autoComplete="off"
+                  disabled={isVerifyingAdmin}
+                />
+                <button
+                  type="button"
+                  aria-label={showAdminToken ? "非表示にする" : "表示する"}
+                  onClick={() => setShowAdminToken((current) => !current)}
+                  disabled={isVerifyingAdmin}
+                >
+                  {showAdminToken ? <EyeOff size={17} /> : <Eye size={17} />}
+                </button>
+              </div>
+            </label>
+            {adminTokenError ? <p className="delete-error">{adminTokenError}</p> : null}
+
+            <div className="delete-actions">
+              <button
+                type="button"
+                onClick={() => setIsAdminDialogOpen(false)}
+                disabled={isVerifyingAdmin}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                className="primary-action"
+                onClick={verifyAdminToken}
+                disabled={isVerifyingAdmin}
+              >
+                {isVerifyingAdmin ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />}
+                有効にする
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

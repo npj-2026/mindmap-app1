@@ -71,16 +71,18 @@ export function removeRecentMap(roomId: string) {
 
 export function getAdminToken() {
   if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(adminTokenKey) ?? "";
+  window.localStorage.removeItem(adminTokenKey);
+  return window.sessionStorage.getItem(adminTokenKey) ?? "";
 }
 
 export function setAdminToken(token: string) {
   if (typeof window === "undefined") return;
+  window.localStorage.removeItem(adminTokenKey);
   const trimmed = token.trim();
   if (trimmed) {
-    window.localStorage.setItem(adminTokenKey, trimmed);
+    window.sessionStorage.setItem(adminTokenKey, trimmed);
   } else {
-    window.localStorage.removeItem(adminTokenKey);
+    window.sessionStorage.removeItem(adminTokenKey);
   }
 }
 
