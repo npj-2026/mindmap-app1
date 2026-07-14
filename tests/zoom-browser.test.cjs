@@ -9,7 +9,7 @@ const test = require("node:test");
 const repoRoot = path.resolve(__dirname, "..");
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-test("actual Next.js mind map keeps viewport anchors while zooming", { timeout: 90000 }, async (t) => {
+test("actual Next.js mind map supports zoom and Markdown document import", { timeout: 90000 }, async (t) => {
   if (!fs.existsSync(chromePath)) {
     t.skip("Google Chrome is not available in this environment");
     return;
@@ -129,14 +129,56 @@ test("actual Next.js mind map keeps viewport anchors while zooming", { timeout: 
   const afterWheel = await cdp.evaluate("window.__mindmapZoomTest.worldAtLocalPoint(320, 210)");
   assertAlmostEqual(afterWheel.x, beforeWheel.x, 0.01);
   assertAlmostEqual(afterWheel.y, beforeWheel.y, 0.01);
+
+  await cdp.evaluate("window.__mindmapZoomTest.clickButtonByText('資料から作成')");
+  await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.document-textarea'))"), 10000);
+  await cdp.evaluate(`
+    window.__mindmapZoomTest.setTextarea('.document-textarea', ${JSON.stringify(sixLevelMarkdown())});
+    window.__mindmapZoomTest.clickButtonByText('作成前プレビューを作る');
+  `);
+  await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.readPreviewChain().titles.length === 6"), 15000);
+  const preview = await cdp.evaluate("window.__mindmapZoomTest.readPreviewChain()");
+  assert.deepEqual(preview.titles, [
+    "Needsproject JAPAN",
+    "通信・デジタル支援",
+    "事業者向け支援",
+    "Webサイト支援",
+    "既存サイト診断",
+    "SEO・表示速度・導線を分析",
+  ]);
+  assert.deepEqual(preview.childCounts, [1, 1, 1, 1, 1, 0]);
+
+  await cdp.evaluate(`
+    window.__mindmapZoomTest.selectApplyMode('replace');
+    window.__mindmapZoomTest.setChecked('.confirm-line input', true);
+    window.__mindmapZoomTest.clickButtonByText('マップへ反映');
+  `);
+  await waitFor(() => cdp.evaluate("!document.querySelector('.document-modal')"), 10000);
+  await cdp.evaluate("window.__mindmapZoomTest.openMoreMenu()");
+  await cdp.evaluate("window.__mindmapZoomTest.clickButtonByText('すべて展開')");
+  await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.readCanvasNodes().length >= 6"), 10000);
+  const canvasNodes = await cdp.evaluate("window.__mindmapZoomTest.readCanvasNodes()");
+  const expected = [
+    ["Needsproject JAPAN", 0],
+    ["通信・デジタル支援", 1],
+    ["事業者向け支援", 2],
+    ["Webサイト支援", 3],
+    ["既存サイト診断", 4],
+    ["SEO・表示速度・導線を分析", 5],
+  ];
+  for (const [title, depth] of expected) {
+    const node = canvasNodes.find((item) => item.text === title);
+    assert.ok(node, `expected canvas node ${title}`);
+    assert.equal(node.depth, depth, `expected ${title} to be depth ${depth}`);
+  }
 });
 
 function startNextApp(port) {
-  const nextCli = path.join(repoRoot, "node_modules", "next", "dist", "bin", "next");
   const output = [];
-  const child = childProcess.spawn(process.execPath, [
-    nextCli,
+  const child = childProcess.spawn("npm", [
+    "run",
     "dev",
+    "--",
     "--hostname",
     "127.0.0.1",
     "--port",
@@ -153,6 +195,16 @@ function startNextApp(port) {
   child.stderr.on("data", (chunk) => output.push(chunk.toString()));
   child.logs = () => output.join("");
   return child;
+}
+
+function sixLevelMarkdown() {
+  return `# Needsproject JAPAN
+
+## 通信・デジタル支援
+### 事業者向け支援
+#### Webサイト支援
+##### 既存サイト診断
+###### SEO・表示速度・導線を分析`;
 }
 
 function installBrowserHelpersScript() {
@@ -186,6 +238,33 @@ function installBrowserHelpersScript() {
           y: Number(match[2]),
           scale: Number(match[3])
         };
+      }
+
+      function visible(element) {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      }
+
+      function dispatchInput(element, value) {
+        const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        setter.call(element, value);
+        element.dispatchEvent(new InputEvent('input', { bubbles: true, data: value }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+
+      function buttonByText(text) {
+        const button = Array.from(document.querySelectorAll('button')).find((candidate) =>
+          visible(candidate) &&
+          !candidate.disabled &&
+          candidate.textContent.replace(/\\s+/g, '').includes(text.replace(/\\s+/g, ''))
+        );
+        if (!button) throw new Error('Missing button: ' + text);
+        return button;
+      }
+
+      function firstDirectNode(container) {
+        return container ? Array.from(container.children).find((child) => child.classList.contains('preview-node')) : null;
       }
 
       function worldAtLocalPoint(localX, localY) {
@@ -234,6 +313,58 @@ function installBrowserHelpersScript() {
         worldAtCanvasCenter() {
           const canvasRect = element('mindmap-canvas').getBoundingClientRect();
           return worldAtLocalPoint(canvasRect.width / 2, canvasRect.height / 2);
+        },
+        clickButtonByText(text) {
+          buttonByText(text).click();
+        },
+        setTextarea(selector, value) {
+          const textarea = document.querySelector(selector);
+          if (!textarea) throw new Error('Missing textarea: ' + selector);
+          dispatchInput(textarea, value);
+        },
+        setChecked(selector, checked) {
+          const input = document.querySelector(selector);
+          if (!input) throw new Error('Missing checkbox: ' + selector);
+          if (input.checked !== checked) input.click();
+        },
+        selectApplyMode(value) {
+          const select = Array.from(document.querySelectorAll('select')).find((candidate) =>
+            Array.from(candidate.options).some((option) => option.value === value)
+          );
+          if (!select) throw new Error('Missing apply mode select');
+          select.value = value;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        },
+        readPreviewChain() {
+          const titleInput = document.querySelector('.document-preview .field input');
+          const titles = titleInput ? [titleInput.value] : [];
+          const childCounts = [];
+          let node = firstDirectNode(document.querySelector('.preview-tree'));
+          while (node) {
+            const title = node.querySelector(':scope > .preview-node-main input').value;
+            const children = node.querySelector(':scope > .preview-children');
+            const directChildren = children
+              ? Array.from(children.children).filter((child) => child.classList.contains('preview-node'))
+              : [];
+            titles.push(title);
+            childCounts.push(directChildren.length);
+            node = directChildren[0] || null;
+          }
+          if (titles.length) childCounts.unshift(document.querySelectorAll('.preview-tree > .preview-node').length);
+          return { titles, childCounts };
+        },
+        openMoreMenu() {
+          buttonByText('その他').click();
+        },
+        readCanvasNodes() {
+          return Array.from(document.querySelectorAll('[data-testid="mindmap-root-node"], [data-testid="mindmap-node"]'))
+            .map((node) => ({
+              text: node.querySelector('textarea')?.value || '',
+              depth: Number(node.dataset.depth),
+              parentId: node.dataset.parentId || null,
+              left: node.getBoundingClientRect().left,
+              width: node.getBoundingClientRect().width
+            }));
         }
       };
     })()

@@ -501,6 +501,39 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
   }, [isTestMode, liveblocksClient, refreshUndoAvailability, roomId, shareReady, token]);
 
   useEffect(() => {
+    if (!isTestMode || !testSnapshot) return;
+
+    const yDoc = new Y.Doc();
+    docRef.current = yDoc;
+    replaceDocument(yDoc, testSnapshot, SYSTEM_ORIGIN);
+
+    const nodesMap = getNodesMap(yDoc);
+    const metaMap = getMetaMap(yDoc);
+    undoManagerRef.current = new Y.UndoManager([nodesMap, metaMap], {
+      trackedOrigins: new Set([LOCAL_ORIGIN]),
+      captureTimeout: 700,
+    });
+
+    const updateSnapshot = () => {
+      setSnapshot(snapshotFromDoc(yDoc));
+      refreshUndoAvailability();
+    };
+
+    nodesMap.observeDeep(updateSnapshot);
+    metaMap.observe(updateSnapshot);
+    updateSnapshot();
+
+    return () => {
+      nodesMap.unobserveDeep(updateSnapshot);
+      metaMap.unobserve(updateSnapshot);
+      undoManagerRef.current?.destroy();
+      undoManagerRef.current = null;
+      docRef.current = null;
+      yDoc.destroy();
+    };
+  }, [isTestMode, refreshUndoAvailability, testSnapshot]);
+
+  useEffect(() => {
     roomRef.current?.updatePresence({ selectedNodeId, editingNodeId });
   }, [selectedNodeId, editingNodeId]);
 
@@ -1766,6 +1799,8 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
                   }`}
                   data-testid={node.id === ROOT_NODE_ID ? "mindmap-root-node" : "mindmap-node"}
                   data-node-id={node.id}
+                  data-parent-id={node.parentId ?? ""}
+                  data-depth={getDepth(snapshot.nodes, node.id)}
                   key={node.id}
                   style={
                     {
