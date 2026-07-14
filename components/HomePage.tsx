@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowRight, Copy, ExternalLink, Loader2, Plus, UserRound } from "lucide-react";
 import type { RecentMap } from "@/types/mindmap";
 import { getRecentMaps, getUserName, saveCreatedLinks, setUserName } from "@/lib/local";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 type CreateRoomResponse = {
   roomId: string;
@@ -54,6 +55,13 @@ export function HomePage() {
 
   return (
     <main className="home">
+      <header className="home-topbar">
+        <div className="brand-row compact">
+          <div className="brand-icon">M</div>
+          <span>みんなのマインドマップ</span>
+        </div>
+        <ThemeToggle />
+      </header>
       <section className="home-hero">
         <div className="home-copy">
           <div className="brand-row">

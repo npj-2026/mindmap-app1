@@ -77,6 +77,7 @@ import {
 import { getClientId, getUserName, pendingImportKey, saveCreatedLinks, saveRecentMap, setUserName } from "@/lib/local";
 import { nodePalette } from "@/lib/colors";
 import { StylePanel } from "@/components/StylePanel";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { defaultNodeStyle, normalizeStyle } from "@/lib/stylePresets";
 import {
   backgroundCss,
@@ -938,6 +939,8 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
             <Group size={17} />
             <span>{Math.max(1, participants.length)}人</span>
           </div>
+
+          <ThemeToggle />
 
           <button className="share-button" type="button" onClick={loadShareLinks}>
             <Share2 size={17} />

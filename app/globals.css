@@ -2,38 +2,38 @@
 
 :root {
   color-scheme: light;
-  --bg: #f5fbff;
+  --bg: #f7f9fc;
+  --canvas-bg: #ffffff;
   --surface: #ffffff;
   --surface-soft: #f8fafc;
-  --line: #dbeafe;
-  --line-strong: #bae6fd;
+  --line: #d8e0ea;
+  --line-strong: #c7d2e1;
   --text: #0f172a;
-  --muted: #64748b;
-  --primary: #2563eb;
-  --primary-soft: #dbeafe;
+  --muted: #5f6f85;
+  --primary: #2f80ed;
+  --primary-soft: #e8f2ff;
   --cyan: #06b6d4;
   --green: #16a34a;
   --danger: #dc2626;
-  --shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
+  --shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #07111f;
-    --surface: #0f172a;
-    --surface-soft: #111c2f;
-    --line: #1e3a5f;
-    --line-strong: #164e63;
-    --text: #e5f3ff;
-    --muted: #a7b7c8;
-    --primary: #60a5fa;
-    --primary-soft: #102a4a;
-    --cyan: #22d3ee;
-    --green: #4ade80;
-    --danger: #f87171;
-    --shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
-  }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111827;
+  --canvas-bg: #172033;
+  --surface: #182235;
+  --surface-soft: #202b40;
+  --line: #34445d;
+  --line-strong: #40536f;
+  --text: #edf5ff;
+  --muted: #b5c3d6;
+  --primary: #60a5fa;
+  --primary-soft: #193657;
+  --cyan: #22d3ee;
+  --green: #4ade80;
+  --danger: #f87171;
+  --shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
 }
 
 * {
@@ -81,7 +81,21 @@ a {
 
 .home {
   min-height: 100vh;
-  padding: 42px;
+  padding: 28px 42px 42px;
+  background: var(--bg);
+}
+
+.home-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1120px;
+  margin: 0 auto 42px;
+  padding: 8px 0;
+}
+
+.brand-row.compact {
+  font-size: 0.96rem;
 }
 
 .home-hero {
@@ -183,6 +197,7 @@ a {
 
 .primary-action,
 .share-button,
+.theme-toggle,
 .toolbar button,
 .rail-section button,
 .rail-back,
@@ -214,6 +229,12 @@ a {
   background: var(--primary);
   color: white;
   border-color: transparent;
+}
+
+.theme-toggle {
+  min-width: 104px;
+  background: var(--surface);
+  color: var(--text);
 }
 
 .error-text,
@@ -285,18 +306,16 @@ a {
 .left-rail,
 .style-panel {
   min-width: 0;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface);
   border-right: 1px solid var(--line);
   padding: 14px;
   overflow: auto;
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
 
-@media (prefers-color-scheme: dark) {
-  .left-rail,
-  .style-panel {
-    background: rgba(15, 23, 42, 0.94);
-  }
+:root[data-theme="dark"] .left-rail,
+:root[data-theme="dark"] .style-panel {
+  background: var(--surface);
 }
 
 .left-collapsed .left-rail,
@@ -497,9 +516,9 @@ a {
   position: relative;
   overflow: hidden;
   background:
-    linear-gradient(rgba(37, 99, 235, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(37, 99, 235, 0.06) 1px, transparent 1px),
-    var(--bg);
+    linear-gradient(rgba(47, 128, 237, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(47, 128, 237, 0.055) 1px, transparent 1px),
+    var(--canvas-bg);
   background-size: 40px 40px;
   touch-action: none;
 }
@@ -654,16 +673,14 @@ a {
   gap: 8px;
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.92);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
   box-shadow: var(--shadow);
   padding: 8px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .zoom-controls,
-  .selection-panel {
-    background: rgba(15, 23, 42, 0.92);
-  }
+:root[data-theme="dark"] .zoom-controls,
+:root[data-theme="dark"] .selection-panel {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
 }
 
 .zoom-controls {
