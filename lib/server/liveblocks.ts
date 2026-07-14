@@ -7,6 +7,8 @@ export const roomPrefix = "mindmap";
 export type MindMapRoomMetadata = {
   kind?: string;
   title?: string;
+  ownerTokenHash?: string;
+  ownerTokenCipher?: string;
   editTokenHash?: string;
   viewTokenHash?: string;
   editTokenCipher?: string;
@@ -89,6 +91,15 @@ export function accessForToken(metadata: MindMapRoomMetadata, token: string): Ac
     return "view";
   }
   return null;
+}
+
+export function isOwnerToken(metadata: MindMapRoomMetadata, token: string) {
+  return Boolean(token && metadata.ownerTokenHash && hashToken(token) === metadata.ownerTokenHash);
+}
+
+export function isAdminToken(token: string) {
+  const configured = process.env.MINDMAP_ADMIN_TOKEN;
+  return Boolean(token && configured && hashToken(token) === hashToken(configured));
 }
 
 export function isMindMapRoom(roomId: string) {

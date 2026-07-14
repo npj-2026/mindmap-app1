@@ -10,6 +10,15 @@ import {
 
 export const runtime = "nodejs";
 
+function liveblocksStatus(error: unknown) {
+  const candidate = error as {
+    status?: number;
+    statusCode?: number;
+    response?: { status?: number };
+  };
+  return candidate.status ?? candidate.statusCode ?? candidate.response?.status;
+}
+
 type RouteContext = {
   params: Promise<{ roomId: string }>;
 };
@@ -27,7 +36,18 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const liveblocks = getLiveblocks();
-    const room = await liveblocks.getRoom(roomId);
+    let room;
+    try {
+      room = await liveblocks.getRoom(roomId);
+    } catch (error) {
+      if (liveblocksStatus(error) === 404) {
+        return NextResponse.json(
+          { error: "not_found", reason: "このマップは削除されています。" },
+          { status: 404, headers: { "Cache-Control": "no-store" } },
+        );
+      }
+      throw error;
+    }
     const metadata = (room.metadata ?? {}) as MindMapRoomMetadata;
     const access = accessForToken(metadata, token);
 

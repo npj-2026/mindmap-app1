@@ -13,6 +13,7 @@ type CreateRoomResponse = {
   viewUrl: string;
   editToken: string;
   viewToken: string;
+  ownerToken?: string;
   error?: string;
   message?: string;
 };

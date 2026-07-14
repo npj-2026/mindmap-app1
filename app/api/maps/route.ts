@@ -19,6 +19,7 @@ export async function POST(request: Request) {
         : "新しいマインドマップ";
 
     const roomId = makeRoomId();
+    const ownerToken = makeShareToken();
     const editToken = makeShareToken();
     const viewToken = makeShareToken();
     const liveblocks = getLiveblocks();
@@ -28,6 +29,8 @@ export async function POST(request: Request) {
       metadata: {
         kind: "mindmap",
         title,
+        ownerTokenHash: hashToken(ownerToken),
+        ownerTokenCipher: encryptToken(ownerToken),
         editTokenHash: hashToken(editToken),
         viewTokenHash: hashToken(viewToken),
         editTokenCipher: encryptToken(editToken),
@@ -40,6 +43,7 @@ export async function POST(request: Request) {
       {
         roomId,
         title,
+        ownerToken,
         editToken,
         viewToken,
         editUrl: mapUrl(roomId, "edit", editToken),

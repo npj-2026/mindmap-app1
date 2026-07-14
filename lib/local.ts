@@ -3,6 +3,7 @@ import type { RecentMap, ShareLinks } from "@/types/mindmap";
 const userIdKey = "mindmap:user-id";
 const userNameKey = "mindmap:user-name";
 const recentMapsKey = "mindmap:recent-maps";
+const adminTokenKey = "mindmap:admin-token";
 
 export function getClientId() {
   if (typeof window === "undefined") return "server";
@@ -39,8 +40,14 @@ export function getRecentMaps(): RecentMap[] {
 
 export function saveRecentMap(map: RecentMap) {
   if (typeof window === "undefined") return;
+  const existing = getRecentMaps().find((item) => item.roomId === map.roomId);
   const maps = getRecentMaps().filter((item) => item.roomId !== map.roomId);
-  maps.unshift({ ...map, lastOpenedAt: Date.now() });
+  maps.unshift({
+    ...existing,
+    ...map,
+    ownerToken: map.ownerToken ?? existing?.ownerToken,
+    lastOpenedAt: Date.now(),
+  });
   window.localStorage.setItem(recentMapsKey, JSON.stringify(maps.slice(0, 24)));
 }
 
@@ -50,8 +57,31 @@ export function saveCreatedLinks(links: ShareLinks & { title: string }) {
     title: links.title,
     editUrl: links.editUrl,
     viewUrl: links.viewUrl,
+    ownerToken: links.ownerToken,
     lastOpenedAt: Date.now(),
   });
+}
+
+export function removeRecentMap(roomId: string) {
+  if (typeof window === "undefined") return;
+  const maps = getRecentMaps().filter((item) => item.roomId !== roomId);
+  window.localStorage.setItem(recentMapsKey, JSON.stringify(maps));
+  window.localStorage.removeItem(pendingImportKey(roomId));
+}
+
+export function getAdminToken() {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(adminTokenKey) ?? "";
+}
+
+export function setAdminToken(token: string) {
+  if (typeof window === "undefined") return;
+  const trimmed = token.trim();
+  if (trimmed) {
+    window.localStorage.setItem(adminTokenKey, trimmed);
+  } else {
+    window.localStorage.removeItem(adminTokenKey);
+  }
 }
 
 export function pendingImportKey(roomId: string) {

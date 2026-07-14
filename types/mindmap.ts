@@ -115,6 +115,7 @@ export type ShareLinks = {
   viewUrl: string;
   editToken?: string;
   viewToken?: string;
+  ownerToken?: string;
 };
 
 export type RecentMap = {
@@ -122,7 +123,18 @@ export type RecentMap = {
   title: string;
   editUrl?: string;
   viewUrl: string;
+  ownerToken?: string;
   lastOpenedAt: number;
+};
+
+export type MapVersion = {
+  id: string;
+  title: string;
+  snapshot: MindMapSnapshot;
+  createdAt: number;
+  editorName: string;
+  reason: string;
+  checksum: string;
 };
 
 export type LiveblocksPresence = {

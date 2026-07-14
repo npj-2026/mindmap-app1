@@ -954,6 +954,17 @@ a {
   padding: 20px;
 }
 
+.history-modal {
+  width: min(860px, calc(100vw - 28px));
+  max-height: min(760px, calc(100vh - 28px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
 .modal-head {
   display: flex;
   justify-content: space-between;
@@ -979,6 +990,93 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+
+.admin-token-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.admin-token-field input {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 12px;
+}
+
+.history-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.history-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 460px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.history-list button {
+  display: grid;
+  gap: 4px;
+  min-height: auto;
+  justify-items: start;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 12px;
+  text-align: left;
+}
+
+.history-list button.active {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.history-list span,
+.history-list em,
+.history-preview span,
+.history-preview p {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-style: normal;
+}
+
+.history-empty,
+.history-preview {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-soft);
+  padding: 16px;
+}
+
+.history-preview {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.history-preview ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--text);
+}
+
+.restore-button {
+  justify-self: start;
+  background: var(--primary);
+  color: #fff;
+  border-color: transparent;
 }
 
 .spin {
@@ -1018,6 +1116,14 @@ a {
 
   .home-hero {
     grid-template-columns: 1fr;
+  }
+
+  .history-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .history-list {
+    max-height: 240px;
   }
 
   .mindmap-shell,

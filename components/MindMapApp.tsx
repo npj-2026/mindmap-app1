@@ -16,6 +16,7 @@ import {
   FileText,
   GitBranchPlus,
   Group,
+  History,
   Loader2,
   Lock,
   Maximize,
@@ -46,6 +47,7 @@ import type {
   LiveblocksPresence,
   MindMapSnapshot,
   MindNode,
+  MapVersion,
   NodeStyle,
   Participant,
   ShareLinks,
@@ -55,6 +57,7 @@ import {
   NODE_HEIGHT,
   NODE_WIDTH,
   ROOT_NODE_ID,
+  SYSTEM_ORIGIN,
   autoLayout,
   collectDescendantIds,
   createNodeMap,
@@ -74,7 +77,17 @@ import {
   visibleNodeIds,
   getStyleMap,
 } from "@/lib/mindmap";
-import { getClientId, getUserName, pendingImportKey, saveCreatedLinks, saveRecentMap, setUserName } from "@/lib/local";
+import {
+  getAdminToken,
+  getClientId,
+  getRecentMaps,
+  getUserName,
+  pendingImportKey,
+  saveCreatedLinks,
+  saveRecentMap,
+  setAdminToken,
+  setUserName,
+} from "@/lib/local";
 import { nodePalette } from "@/lib/colors";
 import { StylePanel } from "@/components/StylePanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -147,6 +160,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const [isSynced, setIsSynced] = useState(false);
   const [shareLinks, setShareLinks] = useState<ShareLinks | null>(null);
   const [message, setMessage] = useState("");
+  const [shareReady, setShareReady] = useState(false);
   const [transform, setTransform] = useState<Transform>({ x: -3000, y: -3300, scale: 0.9 });
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([ROOT_NODE_ID]);
@@ -156,6 +170,13 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [showGuide, setShowGuide] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [versions, setVersions] = useState<MapVersion[]>([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [previewVersion, setPreviewVersion] = useState<MapVersion | null>(null);
+  const [isRestoringVersion, setIsRestoringVersion] = useState(false);
+  const [adminTokenValue, setAdminTokenValue] = useState("");
 
   const docRef = useRef<Y.Doc | null>(null);
   const undoManagerRef = useRef<Y.UndoManager | null>(null);
@@ -165,8 +186,13 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const panRef = useRef<PanState | null>(null);
+  const userNameRef = useRef("ゲスト");
+  const canEditRef = useRef(false);
+  const versionTimerRef = useRef<number | null>(null);
+  const lastVersionChecksumRef = useRef("");
 
   const canEdit = mode === "edit";
+  canEditRef.current = canEdit;
   const nodesById = useMemo(() => new Map(snapshot.nodes.map((node) => [node.id, node])), [snapshot]);
   const selectedNode = selectedNodeId ? nodesById.get(selectedNodeId) : undefined;
   const selectedNodes = useMemo(
@@ -193,17 +219,24 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         const response = await fetch("/api/liveblocks-auth", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ room, token, userId, name: userName }),
+          body: JSON.stringify({ room, token, userId, name: userNameRef.current }),
         });
         return response.json();
       },
     });
-  }, [token, userName]);
+  }, [token]);
 
   useEffect(() => {
-    setUserNameState(getUserName());
+    const initialName = getUserName();
+    setUserNameState(initialName);
+    userNameRef.current = initialName;
+    setAdminTokenValue(getAdminToken());
     setShowGuide(window.localStorage.getItem("mindmap:guide-seen") !== "yes");
   }, []);
+
+  useEffect(() => {
+    userNameRef.current = userName;
+  }, [userName]);
 
   useEffect(() => {
     if (!toast) return;
@@ -212,12 +245,22 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   }, [toast]);
 
   useEffect(() => {
+    return () => {
+      if (versionTimerRef.current) {
+        window.clearTimeout(versionTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!token) {
       setMessage("共有リンクに必要なトークンがありません。ホームから新しいマップを作成してください。");
+      setShareReady(false);
       return;
     }
 
     let mounted = true;
+    setShareReady(false);
     fetch(`/api/maps/${encodeURIComponent(roomId)}/share`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -229,6 +272,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         if (!mounted) return;
         setShareLinks(data);
         setMode(data.editUrl ? "edit" : "view");
+        setShareReady(true);
         saveRecentMap({
           roomId,
           title: snapshot.title || "マインドマップ",
@@ -238,16 +282,42 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         });
       })
       .catch((caught) => {
-        if (mounted) setMessage(caught instanceof Error ? caught.message : "共有リンクを確認できませんでした。");
+        if (mounted) {
+          setShareReady(false);
+          setMessage(caught instanceof Error ? caught.message : "共有リンクを確認できませんでした。");
+        }
       });
 
     return () => {
       mounted = false;
     };
-  }, [roomId, snapshot.title, token]);
+  }, [roomId, token]);
+
+  const refreshUndoAvailability = useCallback(() => {
+    const manager = undoManagerRef.current as
+      | (Y.UndoManager & { undoStack: unknown[]; redoStack: unknown[] })
+      | null;
+    setCanUndo(Boolean(manager?.undoStack.length));
+    setCanRedo(Boolean(manager?.redoStack.length));
+  }, []);
+
+  const queueVersionSave = useCallback((reason: string) => {
+    if (versionTimerRef.current) {
+      window.clearTimeout(versionTimerRef.current);
+    }
+    versionTimerRef.current = window.setTimeout(() => {
+      const doc = docRef.current;
+      if (!doc) return;
+      const saved = saveVersionSnapshot(doc, reason, userNameRef.current);
+      if (saved) {
+        setVersions(readVersions(doc));
+      }
+      versionTimerRef.current = null;
+    }, 5000);
+  }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !shareReady) return;
 
     const entered = liveblocksClient.enterRoom(roomId, {
       initialPresence: {
@@ -268,8 +338,9 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     const metaMap = getMetaMap(yDoc);
     undoManagerRef.current = new Y.UndoManager([nodesMap, metaMap], {
       trackedOrigins: new Set([LOCAL_ORIGIN]),
-      captureTimeout: 450,
+      captureTimeout: 700,
     });
+    refreshUndoAvailability();
 
     const updateSnapshot = () => {
       const next = snapshotFromDoc(yDoc);
@@ -282,6 +353,8 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         lastOpenedAt: Date.now(),
       });
     };
+    const updateVersions = () => setVersions(readVersions(yDoc));
+    const updateUndoState = () => refreshUndoAvailability();
 
     const handleSync = (synced: boolean) => {
       setIsSynced(synced);
@@ -299,21 +372,30 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         ensureInitialDocument(yDoc);
       }
       updateSnapshot();
+      updateVersions();
+      if (!readVersions(yDoc).length) {
+        saveVersionSnapshot(yDoc, "初期状態", userNameRef.current, true);
+        updateVersions();
+      }
     };
 
     yProvider.on("sync", handleSync);
     if (yProvider.synced) handleSync(true);
     nodesMap.observeDeep(updateSnapshot);
     metaMap.observe(updateSnapshot);
+    getVersionsArray(yDoc).observe(updateVersions);
+    undoManagerRef.current.on("stack-item-added", updateUndoState);
+    undoManagerRef.current.on("stack-item-popped", updateUndoState);
+    undoManagerRef.current.on("stack-item-updated", updateUndoState);
 
     const updateParticipants = (others: LiveblocksOther[]) => {
       setParticipants([
         {
           connectionId: 0,
           id: getClientId(),
-          name: userName,
+          name: userNameRef.current,
           color: "#2563eb",
-          canWrite: canEdit,
+          canWrite: canEditRef.current,
           status: "online",
           cursor: null,
           selectedNodeId,
@@ -346,16 +428,36 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       unsubscribeStatus();
       nodesMap.unobserveDeep(updateSnapshot);
       metaMap.unobserve(updateSnapshot);
+      getVersionsArray(yDoc).unobserve(updateVersions);
       yProvider.off("sync", handleSync);
+      undoManagerRef.current?.off("stack-item-added", updateUndoState);
+      undoManagerRef.current?.off("stack-item-popped", updateUndoState);
+      undoManagerRef.current?.off("stack-item-updated", updateUndoState);
       undoManagerRef.current?.destroy();
       roomRef.current = null;
       entered.leave();
     };
-  }, [canEdit, editingNodeId, liveblocksClient, roomId, selectedNodeId, shareLinks?.editUrl, shareLinks?.viewUrl, token, userName]);
+  }, [liveblocksClient, refreshUndoAvailability, roomId, shareReady, token]);
 
   useEffect(() => {
     roomRef.current?.updatePresence({ selectedNodeId, editingNodeId });
   }, [selectedNodeId, editingNodeId]);
+
+  useEffect(() => {
+    setParticipants((current) =>
+      current.map((participant) =>
+        participant.connectionId === 0
+          ? {
+              ...participant,
+              name: userName,
+              canWrite: canEdit,
+              selectedNodeId,
+              editingNodeId,
+            }
+          : participant,
+      ),
+    );
+  }, [canEdit, editingNodeId, selectedNodeId, userName]);
 
   const selectNode = useCallback((nodeId: string, additive = false) => {
     setSelectedNodeId(nodeId);
@@ -379,7 +481,9 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     const doc = docRef.current;
     if (!doc || !canEdit) return;
     doc.transact(() => fn(doc), LOCAL_ORIGIN);
-  }, [canEdit]);
+    refreshUndoAvailability();
+    queueVersionSave("編集");
+  }, [canEdit, queueVersionSave, refreshUndoAvailability]);
 
   const updateNodeField = useCallback(
     (nodeId: string, field: keyof MindNode, value: string | number | boolean | null) => {
@@ -498,6 +602,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const addChild = useCallback((parentOverride?: MindNode) => {
     const parentNode = parentOverride ?? selectedNode;
     if (!parentNode || !canEdit) return;
+    undoManagerRef.current?.stopCapturing();
     const depth = getDepth(snapshot.nodes, parentNode.id) + 1;
     const siblings = getChildren(snapshot.nodes, parentNode.id);
     const root = nodesById.get(ROOT_NODE_ID);
@@ -522,6 +627,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       const parent = getNodesMap(doc).get(parentNode.id);
       parent?.set("collapsed", false);
     });
+    undoManagerRef.current?.stopCapturing();
     selectNode(id);
     setToast("子ノードを追加しました");
   }, [canEdit, nodesById, selectNode, selectedNode, snapshot.nodes, transact]);
@@ -533,6 +639,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     }
     const parent = selectedNode.parentId ? nodesById.get(selectedNode.parentId) : undefined;
     if (!parent) return;
+    undoManagerRef.current?.stopCapturing();
     const siblings = getChildren(snapshot.nodes, parent.id);
     const id = crypto.randomUUID();
     const sibling = newNode({
@@ -548,12 +655,14 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     transact((doc) => {
       getNodesMap(doc).set(id, createNodeMap(sibling));
     });
+    undoManagerRef.current?.stopCapturing();
     selectNode(id);
     setToast("同じ階層に追加しました");
   }, [addChild, canEdit, nodesById, selectNode, selectedNode, snapshot.nodes, transact]);
 
   const duplicateNode = useCallback(() => {
     if (!selectedNode || selectedNode.id === ROOT_NODE_ID || !canEdit) return;
+    undoManagerRef.current?.stopCapturing();
     const subtreeIds = [selectedNode.id, ...collectDescendantIds(snapshot.nodes, selectedNode.id)];
     const idMap = new Map(subtreeIds.map((id) => [id, crypto.randomUUID()]));
     const clones = subtreeIds
@@ -578,6 +687,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         nodes.set(node.id, createNodeMap(node));
       }
     });
+    undoManagerRef.current?.stopCapturing();
     selectNode(clones[0]?.id ?? selectedNode.id);
     setToast("ノードを複製しました");
   }, [canEdit, nodesById, selectNode, selectedNode, snapshot.nodes, transact]);
@@ -585,39 +695,61 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const deleteNode = useCallback(() => {
     if (!selectedNode || selectedNode.id === ROOT_NODE_ID || !canEdit) return;
     if (!window.confirm("選択中のノードと配下のノードを削除します。よろしいですか？")) return;
+    undoManagerRef.current?.stopCapturing();
     const targetIds = [selectedNode.id, ...collectDescendantIds(snapshot.nodes, selectedNode.id)];
     const nextSelection = selectedNode.parentId ?? ROOT_NODE_ID;
     transact((doc) => {
       const nodes = getNodesMap(doc);
       for (const id of targetIds) nodes.delete(id);
     });
+    undoManagerRef.current?.stopCapturing();
     selectNode(nextSelection);
     setToast("ノードを削除しました");
   }, [canEdit, selectNode, selectedNode, snapshot.nodes, transact]);
 
   const runAutoLayout = useCallback(() => {
     if (!canEdit) return;
+    undoManagerRef.current?.stopCapturing();
     const next = autoLayout(snapshot);
     transact((doc) => replaceDocument(doc, next, LOCAL_ORIGIN));
+    undoManagerRef.current?.stopCapturing();
     setToast("自動整列しました");
   }, [canEdit, snapshot, transact]);
 
   const undo = useCallback(() => {
-    undoManagerRef.current?.undo();
-  }, []);
+    const manager = undoManagerRef.current;
+    if (!manager || !canUndo) return;
+    manager.stopCapturing();
+    manager.undo();
+    manager.stopCapturing();
+    refreshUndoAvailability();
+    queueVersionSave("元に戻す");
+    setToast("操作を元に戻しました");
+  }, [canUndo, queueVersionSave, refreshUndoAvailability]);
 
   const redo = useCallback(() => {
-    undoManagerRef.current?.redo();
-  }, []);
+    const manager = undoManagerRef.current;
+    if (!manager || !canRedo) return;
+    manager.stopCapturing();
+    manager.redo();
+    manager.stopCapturing();
+    refreshUndoAvailability();
+    queueVersionSave("やり直す");
+    setToast("操作をやり直しました");
+  }, [canRedo, queueVersionSave, refreshUndoAvailability]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const isTyping = target?.matches("textarea,input,select") ?? false;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
         else undo();
+      } else if (event.ctrlKey && key === "y") {
+        event.preventDefault();
+        redo();
       } else if (!isTyping && event.key === "Tab") {
         event.preventDefault();
         addChild();
@@ -658,6 +790,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       if (!canEdit) return;
       const target = event.target as HTMLElement;
       if (target.closest("textarea,button,input")) return;
+      undoManagerRef.current?.stopCapturing();
       event.currentTarget.setPointerCapture(event.pointerId);
       setSelectedNodeId(node.id);
       const subtreeIds = [node.id, ...collectDescendantIds(snapshot.nodes, node.id)];
@@ -698,6 +831,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const endNodeDrag = useCallback((event: React.PointerEvent) => {
     if (dragRef.current?.pointerId === event.pointerId) {
       dragRef.current = null;
+      undoManagerRef.current?.stopCapturing();
     }
   }, []);
 
@@ -797,9 +931,57 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     if (!canEdit) return;
     const text = await file.text();
     const parsed = normalizeSnapshot(JSON.parse(text) as MindMapSnapshot);
+    undoManagerRef.current?.stopCapturing();
     transact((doc) => replaceDocument(doc, parsed, LOCAL_ORIGIN));
+    undoManagerRef.current?.stopCapturing();
     setToast("JSONを読み込みました");
   }, [canEdit, transact]);
+
+  const restoreVersion = useCallback(
+    async (version: MapVersion) => {
+      if (!canEdit) {
+        setToast("閲覧専用では復元できません");
+        return;
+      }
+
+      const ownerToken = getRecentMaps().find((map) => map.roomId === roomId)?.ownerToken ?? "";
+      const adminToken = adminTokenValue.trim();
+      if (!ownerToken && !adminToken) {
+        setToast("所有者または管理者だけが復元できます");
+        return;
+      }
+
+      setIsRestoringVersion(true);
+      try {
+        const response = await fetch(`/api/maps/${encodeURIComponent(roomId)}/version-access`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ownerToken, adminToken }),
+        });
+        const data = (await response.json().catch(() => ({}))) as { message?: string };
+        if (!response.ok) {
+          throw new Error(data.message || "復元権限を確認できませんでした。");
+        }
+
+        const doc = docRef.current;
+        if (!doc) throw new Error("マップがまだ同期されていません。");
+        saveVersionSnapshot(doc, "復元前", userNameRef.current, true);
+        undoManagerRef.current?.stopCapturing();
+        transact((currentDoc) => replaceDocument(currentDoc, version.snapshot, LOCAL_ORIGIN));
+        undoManagerRef.current?.stopCapturing();
+        saveVersionSnapshot(doc, `復元: ${version.title}`, userNameRef.current, true);
+        setVersions(readVersions(doc));
+        setIsHistoryOpen(false);
+        setPreviewVersion(null);
+        setToast("過去バージョンを復元しました");
+      } catch (caught) {
+        setToast(caught instanceof Error ? caught.message : "履歴の復元に失敗しました");
+      } finally {
+        setIsRestoringVersion(false);
+      }
+    },
+    [adminTokenValue, canEdit, roomId, transact],
+  );
 
   const exportPng = useCallback(async () => {
     const { dataUrl } = await renderSnapshotToPng(snapshot);
@@ -950,11 +1132,11 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
 
         <nav className="toolbar" aria-label="編集ツール">
           <div className="tool-group">
-            <button type="button" onClick={undo} disabled={!canEdit}>
+            <button type="button" onClick={undo} disabled={!canEdit || !canUndo} title="元に戻す">
               <Undo2 size={17} />
               元に戻す
             </button>
-            <button type="button" onClick={redo} disabled={!canEdit}>
+            <button type="button" onClick={redo} disabled={!canEdit || !canRedo} title="やり直す">
               <Redo2 size={17} />
               やり直す
             </button>
@@ -993,6 +1175,10 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
             <button type="button" onClick={runAutoLayout} disabled={!canEdit}>
               <Sparkles size={17} />
               自動整列
+            </button>
+            <button type="button" onClick={() => setIsHistoryOpen(true)} title="履歴を開く">
+              <History size={17} />
+              履歴
             </button>
           </div>
           <div className="tool-group export-menu">
@@ -1256,6 +1442,82 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
 
       {toast ? <div className="toast">{toast}</div> : null}
 
+      {isHistoryOpen ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setIsHistoryOpen(false)}>
+          <section className="history-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <h2>履歴</h2>
+                <p>保存済みのバージョンを確認して、必要な時点へ戻せます。</p>
+              </div>
+              <button type="button" onClick={() => setIsHistoryOpen(false)} aria-label="履歴を閉じる">
+                <Minus size={18} />
+              </button>
+            </div>
+
+            <label className="admin-token-field">
+              <span>管理者トークン</span>
+              <input
+                value={adminTokenValue}
+                onChange={(event) => {
+                  setAdminTokenValue(event.target.value);
+                  setAdminToken(event.target.value);
+                }}
+                placeholder="管理者だけ入力"
+                type="password"
+              />
+            </label>
+
+            <div className="history-layout">
+              <div className="history-list">
+                {versions.length ? (
+                  versions.map((version) => (
+                    <button
+                      type="button"
+                      key={version.id}
+                      className={previewVersion?.id === version.id ? "active" : ""}
+                      onClick={() => setPreviewVersion(version)}
+                    >
+                      <strong>{version.title}</strong>
+                      <span>{formatDateTime(version.createdAt)}</span>
+                      <em>{version.reason} / {version.editorName}</em>
+                    </button>
+                  ))
+                ) : (
+                  <div className="history-empty">まだ履歴がありません。</div>
+                )}
+              </div>
+
+              <div className="history-preview">
+                {previewVersion ? (
+                  <>
+                    <strong>{previewVersion.title}</strong>
+                    <span>{formatDateTime(previewVersion.createdAt)}</span>
+                    <p>{previewVersion.snapshot.nodes.length}個のノードを含むバージョンです。</p>
+                    <ul>
+                      {previewVersion.snapshot.nodes.slice(0, 6).map((node) => (
+                        <li key={node.id}>{node.text}</li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      className="restore-button"
+                      disabled={isRestoringVersion || !canEdit}
+                      onClick={() => restoreVersion(previewVersion)}
+                    >
+                      <RefreshCw size={16} />
+                      {isRestoringVersion ? "復元中..." : "このバージョンを復元"}
+                    </button>
+                  </>
+                ) : (
+                  <p>左の一覧からバージョンを選んでください。</p>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {isShareOpen && shareLinks ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setIsShareOpen(false)}>
           <section className="share-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
@@ -1336,6 +1598,13 @@ function statusLabel(status: ConnectionStatus, synced: boolean) {
 
 function safeFileName(name: string) {
   return (name || "mindmap").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+}
+
+function formatDateTime(value: number) {
+  return new Intl.DateTimeFormat("ja-JP", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -1516,6 +1785,60 @@ function loadImage(url: string) {
     image.onerror = reject;
     image.src = url;
   });
+}
+
+const maxVersionCount = Number(process.env.NEXT_PUBLIC_MINDMAP_VERSION_LIMIT ?? 40);
+
+function getVersionsArray(doc: Y.Doc) {
+  return doc.getArray<MapVersion>("versions");
+}
+
+function readVersions(doc: Y.Doc) {
+  return getVersionsArray(doc)
+    .toArray()
+    .filter((version): version is MapVersion => Boolean(version?.id && version.snapshot))
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function saveVersionSnapshot(doc: Y.Doc, reason: string, editorName: string, force = false) {
+  const versions = getVersionsArray(doc);
+  const snapshot = snapshotFromDoc(doc);
+  const checksum = checksumSnapshot(snapshot);
+  const latest = versions.get(0);
+
+  if (!force && latest?.checksum === checksum) return false;
+
+  const version: MapVersion = {
+    id: crypto.randomUUID(),
+    title: snapshot.title,
+    snapshot,
+    createdAt: Date.now(),
+    editorName,
+    reason,
+    checksum,
+  };
+
+  doc.transact(() => {
+    versions.insert(0, [version]);
+    if (versions.length > maxVersionCount) {
+      versions.delete(maxVersionCount, versions.length - maxVersionCount);
+    }
+  }, SYSTEM_ORIGIN);
+
+  return true;
+}
+
+function checksumSnapshot(snapshot: MindMapSnapshot) {
+  const stable = {
+    title: snapshot.title,
+    nodes: [...snapshot.nodes].sort((a, b) => a.id.localeCompare(b.id)),
+  };
+  let hash = 0;
+  const text = JSON.stringify(stable);
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16);
 }
 
 function readSavedDefaultStyle() {
