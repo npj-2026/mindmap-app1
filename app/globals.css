@@ -108,7 +108,7 @@ a {
 }
 
 .home-copy h1 {
-  margin: 18px 0 16px;
+  margin: 0 0 16px;
   max-width: 720px;
   font-size: clamp(2.1rem, 5vw, 4.5rem);
   line-height: 1.08;

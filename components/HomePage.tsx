@@ -202,10 +202,6 @@ export function HomePage() {
       </header>
       <section className="home-hero">
         <div className="home-copy">
-          <div className="brand-row">
-            <div className="brand-icon">M</div>
-            <span>みんなのマインドマップ</span>
-          </div>
           <h1>共有リンクだけで、同じマップを一緒に編集。</h1>
           <p>
             ノードの追加、文字編集、移動、色、折りたたみまでLiveblocksとYjsでリアルタイム同期します。
