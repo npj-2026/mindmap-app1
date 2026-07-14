@@ -33,6 +33,14 @@ export function generateFallbackMap(document: ExtractedDocument, options: Docume
   }).map;
 }
 
+export function hasMarkdownOutline(text: string) {
+  const headings = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^#{1,6}\s+\S/.test(line));
+  return headings.some((line) => /^#{2,6}\s+\S/.test(line));
+}
+
 function outlineFromText(text: string) {
   const lines = text.split("\n");
   const items: OutlineItem[] = [];
@@ -40,16 +48,16 @@ function outlineFromText(text: string) {
   let paragraphIndex = 1;
 
   lines.forEach((rawLine) => {
-    const line = rawLine.trim();
-    if (!line) {
+    const trimmedLine = rawLine.trim();
+    if (!trimmedLine) {
       if (paragraph) paragraphIndex += 1;
       paragraph = "";
       return;
     }
 
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    const bulletMatch = line.match(/^(\s*)([-*・●○]|[0-9０-９]+[.)．、])\s+(.+)$/);
-    const numberedHeading = line.match(/^([第]?\d+|[第]?[一二三四五六七八九十]+)[章部節項]\s*[：:、.．]?\s*(.+)$/);
+    const headingMatch = trimmedLine.match(/^(#{1,6})\s+(.+)$/);
+    const bulletMatch = rawLine.match(/^(\s*)([-*・●○]|[0-9０-９]+[.)．、])\s+(.+)$/);
+    const numberedHeading = trimmedLine.match(/^([第]?\d+|[第]?[一二三四五六七八九十]+)[章部節項]\s*[：:、.．]?\s*(.+)$/);
 
     if (headingMatch) {
       const markdownLevel = headingMatch[1].length;
@@ -60,32 +68,32 @@ function outlineFromText(text: string) {
       items.push({
         level: Math.min(5, markdownLevel - 1),
         title: cleanTitle(headingMatch[2]),
-        paragraph: line,
+        paragraph: trimmedLine,
         index: paragraphIndex,
       });
-      paragraph = line;
+      paragraph = trimmedLine;
     } else if (bulletMatch) {
       const indent = Math.floor((bulletMatch[1]?.length ?? 0) / 2);
       items.push({
         level: Math.min(5, indent + 1),
         title: cleanTitle(bulletMatch[3]),
-        paragraph: line,
+        paragraph: trimmedLine,
         index: paragraphIndex,
       });
-      paragraph = line;
+      paragraph = trimmedLine;
     } else if (numberedHeading) {
       items.push({
         level: 1,
         title: cleanTitle(numberedHeading[2]),
-        paragraph: line,
+        paragraph: trimmedLine,
         index: paragraphIndex,
       });
-      paragraph = line;
+      paragraph = trimmedLine;
     } else {
-      paragraph = paragraph ? `${paragraph} ${line}` : line;
+      paragraph = paragraph ? `${paragraph} ${trimmedLine}` : trimmedLine;
       const lastItem = items[items.length - 1];
       if (lastItem) {
-        lastItem.paragraph = `${lastItem.paragraph} ${line}`.trim();
+        lastItem.paragraph = `${lastItem.paragraph} ${trimmedLine}`.trim();
       }
     }
   });

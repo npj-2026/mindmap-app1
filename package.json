@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:parsing": "node --test tests/document-parsing.test.cjs",
+    "test:zoom": "node --test tests/zoom-browser.test.cjs"
   },
   "dependencies": {
     "@liveblocks/client": "^3.8.0",

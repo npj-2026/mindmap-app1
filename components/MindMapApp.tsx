@@ -108,6 +108,17 @@ import {
   radiusForShape,
   shadowCss,
 } from "@/lib/styleRuntime";
+import {
+  MIN_ZOOM,
+  ZOOM_STEP,
+  calculateExportBounds,
+  centerNodeOrBoundsInViewport,
+  clampZoom,
+  fitNodesInViewport,
+  viewportTransformCss,
+  zoomTransformAtPoint,
+  type ViewportTransform,
+} from "@/lib/viewport";
 
 type LiveblocksOther = {
   connectionId: number;
@@ -127,12 +138,6 @@ type MindMapAppProps = {
   roomId: string;
   token: string;
   initialMode: AccessMode;
-};
-
-type Transform = {
-  x: number;
-  y: number;
-  scale: number;
 };
 
 type DragState = {
@@ -171,9 +176,6 @@ const initialSnapshot: MindMapSnapshot = {
   nodes: [],
 };
 
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 2.5;
-const ZOOM_STEP = 0.1;
 const DEFAULT_BRANCH_COLOR = "#38bdf8";
 const RECENT_BRANCH_COLORS_KEY = "mindmap:recent-branch-colors";
 
@@ -189,7 +191,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const [shareLinks, setShareLinks] = useState<ShareLinks | null>(null);
   const [message, setMessage] = useState("");
   const [shareReady, setShareReady] = useState(false);
-  const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 });
+  const [transform, setTransform] = useState<ViewportTransform>({ x: 0, y: 0, scale: 1 });
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([ROOT_NODE_ID]);
   const [copiedStyle, setCopiedStyle] = useState<NodeStyle | null>(null);
@@ -1204,14 +1206,8 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     const localY = event.clientY - rect.top;
     const clampedDelta = Math.max(-100, Math.min(100, event.deltaY));
     setTransform((current) => {
-      const worldX = (localX - current.x) / current.scale;
-      const worldY = (localY - current.y) / current.scale;
-      const nextScale = clampZoom(current.scale * Math.exp(-clampedDelta * 0.0015));
-      return {
-        scale: nextScale,
-        x: localX - worldX * nextScale,
-        y: localY - worldY * nextScale,
-      };
+      const nextScale = current.scale * Math.exp(-clampedDelta * 0.0015);
+      return zoomTransformAtPoint(current, nextScale, { x: localX, y: localY });
     });
   }, []);
 
@@ -1652,6 +1648,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         <div
           ref={canvasRef}
           className="canvas"
+          data-testid="mindmap-canvas"
           onWheel={handleWheel}
           onPointerDown={startPan}
           onPointerMove={(event) => {
@@ -1702,8 +1699,9 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
           <div
             ref={worldRef}
             className="world"
+            data-testid="mindmap-world"
             style={{
-              transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+              transform: viewportTransformCss(transform),
             }}
           >
             <svg className="branches" width="9000" height="9000" viewBox="0 0 9000 9000">
@@ -1727,6 +1725,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
                   className={`mind-node shape-${nodeStyle.shape} ${selected ? "selected" : ""} ${nodeStyle.emphasis ? "emphasis" : ""} ${
                     remoteEditors.length ? "remote-editing" : remoteSelectors.length ? "remote-selected" : ""
                   }`}
+                  data-testid={node.id === ROOT_NODE_ID ? "mindmap-root-node" : "mindmap-node"}
                   key={node.id}
                   style={
                     {
@@ -1834,16 +1833,16 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
           </div>
 
           <div className="zoom-controls">
-            <button type="button" onClick={() => zoomBy(-ZOOM_STEP)} aria-label="縮小">
+            <button type="button" data-testid="zoom-out" onClick={() => zoomBy(-ZOOM_STEP)} aria-label="縮小">
               <ZoomOut size={17} />
             </button>
-            <button type="button" className="zoom-percent" onClick={resetZoom} aria-label="拡大率を100%に戻す">
+            <button type="button" className="zoom-percent" data-testid="zoom-reset" onClick={resetZoom} aria-label="拡大率を100%に戻す">
               {Math.round(transform.scale * 100)}%
             </button>
-            <button type="button" onClick={() => zoomBy(ZOOM_STEP)} aria-label="拡大">
+            <button type="button" data-testid="zoom-in" onClick={() => zoomBy(ZOOM_STEP)} aria-label="拡大">
               <ZoomIn size={17} />
             </button>
-            <button type="button" onClick={fitVisibleNodes} aria-label="全体を表示">
+            <button type="button" data-testid="zoom-fit" onClick={fitVisibleNodes} aria-label="全体を表示">
               <Maximize size={17} />
               全体
             </button>
@@ -2044,57 +2043,6 @@ function branchPath(parent: MindNode, child: MindNode) {
   return `M ${startX} ${startY} C ${c1} ${startY}, ${c2} ${endY}, ${endX} ${endY}`;
 }
 
-function clampZoom(value: number) {
-  return Math.round(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value)) * 1000) / 1000;
-}
-
-function zoomTransformAtPoint(current: Transform, nextScaleValue: number, point: { x: number; y: number }): Transform {
-  const nextScale = clampZoom(nextScaleValue);
-  const worldX = (point.x - current.x) / current.scale;
-  const worldY = (point.y - current.y) / current.scale;
-  return {
-    scale: nextScale,
-    x: point.x - worldX * nextScale,
-    y: point.y - worldY * nextScale,
-  };
-}
-
-function centerNodeOrBoundsInViewport(
-  node: MindNode | undefined,
-  visibleNodes: MindNode[],
-  rect: Pick<DOMRect, "width" | "height">,
-  scale: number,
-): Transform {
-  const nextScale = clampZoom(scale);
-  const bounds = calculateViewportBounds(visibleNodes);
-  const centerX = node ? node.x + node.width / 2 : bounds.minX + bounds.width / 2;
-  const centerY = node ? node.y + node.height / 2 : bounds.minY + bounds.height / 2;
-  return {
-    scale: nextScale,
-    x: rect.width / 2 - centerX * nextScale,
-    y: rect.height / 2 - centerY * nextScale,
-  };
-}
-
-function fitNodesInViewport(
-  nodes: MindNode[],
-  rect: Pick<DOMRect, "width" | "height">,
-  options: { maxScale?: number; padding?: number } = {},
-) {
-  const bounds = calculateViewportBounds(nodes, options.padding ?? 80);
-  const maxScale = options.maxScale ?? 1;
-  const idealScale = Math.min(maxScale, rect.width / bounds.width, rect.height / bounds.height);
-  const scale = clampZoom(idealScale);
-  return {
-    idealScale,
-    transform: {
-      scale,
-      x: rect.width / 2 - (bounds.minX + bounds.width / 2) * scale,
-      y: rect.height / 2 - (bounds.minY + bounds.height / 2) * scale,
-    },
-  };
-}
-
 function pinchMetrics(pointers: Map<number, CanvasPointer>, element: HTMLElement | null) {
   if (!element || pointers.size < 2) return null;
   const rect = element.getBoundingClientRect();
@@ -2194,29 +2142,6 @@ async function renderSnapshotToPng(snapshot: MindMapSnapshot) {
   context.drawImage(image, 0, 0, bounds.width, bounds.height);
   URL.revokeObjectURL(url);
   return { dataUrl: canvas.toDataURL("image/png"), width: bounds.width, height: bounds.height };
-}
-
-function calculateViewportBounds(nodes: MindNode[], padding = 80) {
-  if (!nodes.length) return { minX: 0, minY: 0, width: 1, height: 1 };
-  const minX = Math.min(...nodes.map((node) => node.x)) - padding;
-  const minY = Math.min(...nodes.map((node) => node.y)) - padding;
-  const maxX = Math.max(...nodes.map((node) => node.x + node.width)) + padding;
-  const maxY = Math.max(...nodes.map((node) => node.y + node.height)) + padding;
-  return {
-    minX,
-    minY,
-    width: Math.max(1, Math.ceil(maxX - minX)),
-    height: Math.max(1, Math.ceil(maxY - minY)),
-  };
-}
-
-function calculateExportBounds(nodes: MindNode[]) {
-  const bounds = calculateViewportBounds(nodes, 120);
-  return {
-    ...bounds,
-    width: Math.max(800, bounds.width),
-    height: Math.max(600, bounds.height),
-  };
 }
 
 function buildExportSvg(snapshot: MindMapSnapshot, bounds: { minX: number; minY: number; width: number; height: number }) {

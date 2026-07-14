@@ -1,4 +1,4 @@
-import { generateFallbackMap } from "@/lib/ai/fallback";
+import { generateFallbackMap, hasMarkdownOutline } from "@/lib/ai/fallback";
 import { extractJsonObject, validateGeneratedMap } from "@/lib/ai/validate";
 import { generationMethodLabels, type DocumentGenerationOptions, type ExtractedDocument, type GenerationResponse } from "@/lib/ai/types";
 
@@ -9,6 +9,14 @@ export async function generateMindMapFromDocument(
   options: DocumentGenerationOptions,
 ): Promise<GenerationResponse> {
   const apiKey = process.env.AI_API_KEY;
+  if (hasMarkdownOutline(document.text)) {
+    return {
+      map: generateFallbackMap(document, options),
+      aiConfigured: Boolean(apiKey),
+      warning: apiKey ? undefined : "AI要約を利用するにはAPI設定が必要です。Markdown構造を優先して作成しました。",
+    };
+  }
+
   if (!apiKey) {
     return {
       map: generateFallbackMap(document, options),
