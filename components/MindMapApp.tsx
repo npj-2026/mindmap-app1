@@ -189,7 +189,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const [shareLinks, setShareLinks] = useState<ShareLinks | null>(null);
   const [message, setMessage] = useState("");
   const [shareReady, setShareReady] = useState(false);
-  const [transform, setTransform] = useState<Transform>({ x: -3000, y: -3300, scale: 0.9 });
+  const [transform, setTransform] = useState<Transform>({ x: 0, y: 0, scale: 1 });
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([ROOT_NODE_ID]);
   const [copiedStyle, setCopiedStyle] = useState<NodeStyle | null>(null);
@@ -223,6 +223,8 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const versionTimerRef = useRef<number | null>(null);
   const lastVersionChecksumRef = useRef("");
   const didAutoMigrateLayoutRef = useRef(false);
+  const didInitializeViewportRef = useRef(false);
+  const canvasSizeRef = useRef<{ width: number; height: number } | null>(null);
 
   const canEdit = mode === "edit";
   canEditRef.current = canEdit;
@@ -522,6 +524,60 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     }
     setSelectedNodeIds((current) => current.filter((id) => ids.has(id)));
   }, [selectNode, selectedNodeId, snapshot.nodes]);
+
+  useEffect(() => {
+    if (!isSynced || didInitializeViewportRef.current || !visibleNodes.length) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+    const root = nodesById.get(ROOT_NODE_ID);
+    const fit = fitNodesInViewport(visibleNodes, rect, { maxScale: 1 });
+    if (fit.idealScale >= MIN_ZOOM) {
+      setTransform(fit.transform);
+    } else {
+      setTransform(centerNodeOrBoundsInViewport(root, visibleNodes, rect, MIN_ZOOM));
+    }
+    canvasSizeRef.current = { width: rect.width, height: rect.height };
+    didInitializeViewportRef.current = true;
+  }, [isSynced, nodesById, visibleNodes]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const nextSize = {
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      };
+      const previousSize = canvasSizeRef.current;
+      canvasSizeRef.current = nextSize;
+
+      if (
+        !didInitializeViewportRef.current ||
+        !previousSize ||
+        previousSize.width <= 0 ||
+        previousSize.height <= 0 ||
+        (previousSize.width === nextSize.width && previousSize.height === nextSize.height)
+      ) {
+        return;
+      }
+
+      setTransform((current) => {
+        const worldCenterX = (previousSize.width / 2 - current.x) / current.scale;
+        const worldCenterY = (previousSize.height / 2 - current.y) / current.scale;
+        return {
+          ...current,
+          x: nextSize.width / 2 - worldCenterX * current.scale,
+          y: nextSize.height / 2 - worldCenterY * current.scale,
+        };
+      });
+    });
+
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
 
   const transact = useCallback((fn: (doc: Y.Doc) => void) => {
     const doc = docRef.current;
@@ -975,20 +1031,15 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
 
   const resetZoom = useCallback(() => {
     const rect = canvasRef.current?.getBoundingClientRect();
-    const point = rect ? { x: rect.width / 2, y: rect.height / 2 } : { x: 0, y: 0 };
-    setTransform((current) => zoomTransformAtPoint(current, 1, point));
-  }, []);
+    if (!rect) return;
+    const root = nodesById.get(ROOT_NODE_ID);
+    setTransform(centerNodeOrBoundsInViewport(root, visibleNodes, rect, 1));
+  }, [nodesById, visibleNodes]);
 
   const fitVisibleNodes = useCallback(() => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect || !visibleNodes.length) return;
-    const bounds = calculateBounds(visibleNodes);
-    const nextScale = clampZoom(Math.min(rect.width / bounds.width, rect.height / bounds.height) * 0.92);
-    setTransform({
-      scale: nextScale,
-      x: rect.width / 2 - (bounds.minX + bounds.width / 2) * nextScale,
-      y: rect.height / 2 - (bounds.minY + bounds.height / 2) * nextScale,
-    });
+    setTransform(fitNodesInViewport(visibleNodes, rect, { maxScale: 1 }).transform);
   }, [visibleNodes]);
 
   const canvasToWorld = useCallback(
@@ -1127,6 +1178,14 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     }
   }, []);
 
+  const cancelCanvasInteraction = useCallback(() => {
+    activePointersRef.current.clear();
+    pinchRef.current = null;
+    panRef.current = null;
+    dragRef.current = null;
+    undoManagerRef.current?.stopCapturing();
+  }, []);
+
   const updateCursor = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       const point = canvasToWorld(event.clientX, event.clientY);
@@ -1139,10 +1198,21 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     event.preventDefault();
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-    const zoomFactor = Math.exp(-delta * 0.001);
-    setTransform((current) => zoomTransformAtPoint(current, current.scale * zoomFactor, point));
+    if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+
+    const localX = event.clientX - rect.left;
+    const localY = event.clientY - rect.top;
+    const clampedDelta = Math.max(-100, Math.min(100, event.deltaY));
+    setTransform((current) => {
+      const worldX = (localX - current.x) / current.scale;
+      const worldY = (localY - current.y) / current.scale;
+      const nextScale = clampZoom(current.scale * Math.exp(-clampedDelta * 0.0015));
+      return {
+        scale: nextScale,
+        x: localX - worldX * nextScale,
+        y: localY - worldY * nextScale,
+      };
+    });
   }, []);
 
   const loadShareLinks = useCallback(async () => {
@@ -1589,7 +1659,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
             updateCursor(event);
           }}
           onPointerUp={endPan}
-          onPointerCancel={endPan}
+          onPointerCancel={cancelCanvasInteraction}
         >
           {!isSynced ? (
             <div className="loading-overlay">
@@ -1667,7 +1737,10 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
                   onPointerDown={(event) => startNodeDrag(event, node)}
                   onPointerMove={moveNodeDrag}
                   onPointerUp={endNodeDrag}
-                  onPointerCancel={endNodeDrag}
+                  onPointerCancel={(event) => {
+                    endNodeDrag(event);
+                    cancelCanvasInteraction();
+                  }}
                   onClick={(event) => selectNode(node.id, event.shiftKey)}
                   onDoubleClick={() => {
                     setEditingNodeId(node.id);
@@ -1986,6 +2059,42 @@ function zoomTransformAtPoint(current: Transform, nextScaleValue: number, point:
   };
 }
 
+function centerNodeOrBoundsInViewport(
+  node: MindNode | undefined,
+  visibleNodes: MindNode[],
+  rect: Pick<DOMRect, "width" | "height">,
+  scale: number,
+): Transform {
+  const nextScale = clampZoom(scale);
+  const bounds = calculateViewportBounds(visibleNodes);
+  const centerX = node ? node.x + node.width / 2 : bounds.minX + bounds.width / 2;
+  const centerY = node ? node.y + node.height / 2 : bounds.minY + bounds.height / 2;
+  return {
+    scale: nextScale,
+    x: rect.width / 2 - centerX * nextScale,
+    y: rect.height / 2 - centerY * nextScale,
+  };
+}
+
+function fitNodesInViewport(
+  nodes: MindNode[],
+  rect: Pick<DOMRect, "width" | "height">,
+  options: { maxScale?: number; padding?: number } = {},
+) {
+  const bounds = calculateViewportBounds(nodes, options.padding ?? 80);
+  const maxScale = options.maxScale ?? 1;
+  const idealScale = Math.min(maxScale, rect.width / bounds.width, rect.height / bounds.height);
+  const scale = clampZoom(idealScale);
+  return {
+    idealScale,
+    transform: {
+      scale,
+      x: rect.width / 2 - (bounds.minX + bounds.width / 2) * scale,
+      y: rect.height / 2 - (bounds.minY + bounds.height / 2) * scale,
+    },
+  };
+}
+
 function pinchMetrics(pointers: Map<number, CanvasPointer>, element: HTMLElement | null) {
   if (!element || pointers.size < 2) return null;
   const rect = element.getBoundingClientRect();
@@ -2068,7 +2177,7 @@ function downloadDataUrl(url: string, filename: string) {
 async function renderSnapshotToPng(snapshot: MindMapSnapshot) {
   const visible = visibleNodeIds(snapshot.nodes);
   const nodes = snapshot.nodes.filter((node) => visible.has(node.id));
-  const bounds = calculateBounds(nodes);
+  const bounds = calculateExportBounds(nodes);
   const svg = buildExportSvg(snapshot, bounds);
   const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -2087,9 +2196,8 @@ async function renderSnapshotToPng(snapshot: MindMapSnapshot) {
   return { dataUrl: canvas.toDataURL("image/png"), width: bounds.width, height: bounds.height };
 }
 
-function calculateBounds(nodes: MindNode[]) {
-  if (!nodes.length) return { minX: 0, minY: 0, width: 1200, height: 800 };
-  const padding = 120;
+function calculateViewportBounds(nodes: MindNode[], padding = 80) {
+  if (!nodes.length) return { minX: 0, minY: 0, width: 1, height: 1 };
   const minX = Math.min(...nodes.map((node) => node.x)) - padding;
   const minY = Math.min(...nodes.map((node) => node.y)) - padding;
   const maxX = Math.max(...nodes.map((node) => node.x + node.width)) + padding;
@@ -2097,8 +2205,17 @@ function calculateBounds(nodes: MindNode[]) {
   return {
     minX,
     minY,
-    width: Math.max(800, Math.ceil(maxX - minX)),
-    height: Math.max(600, Math.ceil(maxY - minY)),
+    width: Math.max(1, Math.ceil(maxX - minX)),
+    height: Math.max(1, Math.ceil(maxY - minY)),
+  };
+}
+
+function calculateExportBounds(nodes: MindNode[]) {
+  const bounds = calculateViewportBounds(nodes, 120);
+  return {
+    ...bounds,
+    width: Math.max(800, bounds.width),
+    height: Math.max(600, bounds.height),
   };
 }
 

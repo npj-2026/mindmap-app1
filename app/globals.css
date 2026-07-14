@@ -676,6 +676,7 @@ a {
     var(--canvas-bg);
   background-size: 40px 40px;
   touch-action: none;
+  overscroll-behavior: none;
 }
 
 .world {
@@ -684,6 +685,7 @@ a {
   width: 9000px;
   height: 9000px;
   transform-origin: 0 0;
+  transition: none;
 }
 
 .branches {
