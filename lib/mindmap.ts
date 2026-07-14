@@ -102,7 +102,7 @@ export function readNode(yNode: Y.Map<unknown>): MindNode {
     x: numberValue(yNode.get("x"), 0),
     y: numberValue(yNode.get("y"), 0),
     color: legacyColor,
-    branchColor: stringValue(yNode.get("branchColor"), "#38bdf8"),
+    branchColor: stringValue(yNode.get("branchColor"), legacyColor) || legacyColor || "#38bdf8",
     collapsed: Boolean(yNode.get("collapsed")),
     width: numberValue(yNode.get("width"), style.minWidth || NODE_WIDTH),
     height: numberValue(yNode.get("height"), style.minHeight || NODE_HEIGHT),

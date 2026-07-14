@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   AlignCenter,
@@ -25,6 +25,7 @@ import { nodePalette } from "@/lib/colors";
 import { readableTextColor } from "@/lib/styleRuntime";
 
 type ApplyScope = "level" | "children" | "all";
+type BranchColorScope = "selected" | "children" | "level" | "all";
 
 type StylePanelProps = {
   selectedNodes: MindNode[];
@@ -32,9 +33,12 @@ type StylePanelProps = {
   hasCopiedStyle: boolean;
   onPatchStyle: (patch: Partial<NodeStyle>) => void;
   onPatchNode: (patch: Partial<Pick<MindNode, "width" | "height">>) => void;
+  onPatchBranchColor: (color: string, scope: BranchColorScope) => void;
+  onResetBranchColor: (scope: BranchColorScope) => void;
   onCopyStyle: () => void;
   onPasteStyle: () => void;
   onApplyScope: (scope: ApplyScope) => void;
+  recentBranchColors: string[];
   onClose?: () => void;
 };
 
@@ -66,20 +70,26 @@ export function StylePanel({
   hasCopiedStyle,
   onPatchStyle,
   onPatchNode,
+  onPatchBranchColor,
+  onResetBranchColor,
   onCopyStyle,
   onPasteStyle,
   onApplyScope,
+  recentBranchColors,
   onClose,
 }: StylePanelProps) {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     easy: true,
     detail: false,
   });
+  const [branchScope, setBranchScope] = useState<BranchColorScope>("selected");
   const primaryNode = selectedNodes[0];
   const style = normalizeStyle(primaryNode?.style, primaryNode?.color);
   const selectedCount = selectedNodes.length;
   const canUse = canEdit && selectedCount > 0;
   const readableSuggestion = useMemo(() => readableTextColor(style.backgroundColor), [style.backgroundColor]);
+  const branchColor = primaryNode?.branchColor || primaryNode?.color || "#38bdf8";
+  const branchColorLabel = primaryNode?.parentId === null ? "配下の線色" : "線の色";
 
   function toggle(section: string) {
     setOpenSections((current) => ({ ...current, [section]: !current[section] }));
@@ -153,6 +163,14 @@ export function StylePanel({
                   読みやすい文字色にする
                 </button>
                 <ColorField label="背景色" value={style.backgroundColor} disabled={!canUse} onChange={(backgroundColor) => onPatchStyle({ backgroundMode: "solid", backgroundColor })} />
+                <ColorField
+                  label={branchColorLabel}
+                  value={branchColor}
+                  disabled={!canUse}
+                  recentColors={recentBranchColors}
+                  onChange={(color) => onPatchBranchColor(color, "selected")}
+                  onReset={() => onResetBranchColor("selected")}
+                />
                 <label className="field">
                   <span>枠の形</span>
                   <select value={style.shape} disabled={!canUse} onChange={(event) => onPatchStyle({ shape: event.target.value as NodeShape })}>
@@ -256,6 +274,23 @@ export function StylePanel({
                 <SubSection title="色" icon={<PaintBucket size={15} />}>
                   <ColorField label="枠線色" value={style.borderColor} disabled={!canUse} onChange={(borderColor) => onPatchStyle({ borderColor })} />
                   <ColorField label="影の色" value={style.shadowColor} disabled={!canUse} onChange={(shadowColor) => onPatchStyle({ shadowColor })} />
+                  <label className="field">
+                    <span>線色の範囲</span>
+                    <select value={branchScope} disabled={!canUse} onChange={(event) => setBranchScope(event.target.value as BranchColorScope)}>
+                      <option value="selected">{selectedCount > 1 ? "選択した線" : primaryNode?.parentId === null ? "配下の線だけ" : "選択中の線だけ"}</option>
+                      <option value="children">選択中ノードの配下すべて</option>
+                      <option value="level">同じ階層の線すべて</option>
+                      <option value="all">マップ内の線すべて</option>
+                    </select>
+                  </label>
+                  <ColorField
+                    label="線の色"
+                    value={branchColor}
+                    disabled={!canUse}
+                    recentColors={recentBranchColors}
+                    onChange={(color) => onPatchBranchColor(color, branchScope)}
+                    onReset={() => onResetBranchColor(branchScope)}
+                  />
                 </SubSection>
 
                 <SubSection title="形・枠線" icon={<Shapes size={15} />}>
@@ -392,34 +427,72 @@ function ColorField({
   label,
   value,
   disabled,
+  recentColors = [],
   onChange,
+  onReset,
 }: {
   label: string;
   value: string;
   disabled: boolean;
+  recentColors?: string[];
   onChange: (value: string) => void;
+  onReset?: () => void;
 }) {
   const [showPalette, setShowPalette] = useState(false);
+  const [draftValue, setDraftValue] = useState(value);
+
+  useEffect(() => {
+    setDraftValue(value);
+  }, [value]);
+
+  const commitColor = (next: string) => {
+    setDraftValue(next);
+    if (/^#[0-9a-fA-F]{6}$/.test(next)) onChange(next.toLowerCase());
+  };
+
   return (
     <div className="color-field">
       <div className="field">
         <span>{label}</span>
         <div className="color-row">
-          <input type="color" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+          <input type="color" value={value} disabled={disabled} onChange={(event) => commitColor(event.target.value)} />
           <input
-            value={value}
+            value={draftValue}
             disabled={disabled}
             maxLength={7}
             onChange={(event) => {
               const next = event.target.value;
-              if (/^#[0-9a-fA-F]{0,6}$/.test(next)) onChange(next);
+              if (/^#[0-9a-fA-F]{0,6}$/.test(next)) commitColor(next);
+            }}
+            onBlur={() => {
+              if (!/^#[0-9a-fA-F]{6}$/.test(draftValue)) setDraftValue(value);
             }}
           />
           <button type="button" disabled={disabled} onClick={() => setShowPalette((current) => !current)}>
             256色
           </button>
+          {onReset ? (
+            <button type="button" disabled={disabled} onClick={onReset}>
+              初期色
+            </button>
+          ) : null}
         </div>
       </div>
+      {recentColors.length ? (
+        <div className="recent-colors" aria-label={`${label}の最近使用した色`}>
+          <span>最近</span>
+          {recentColors.map((color) => (
+            <button
+              key={`${label}-${color}`}
+              type="button"
+              disabled={disabled}
+              style={{ background: color }}
+              aria-label={`${label} ${color}`}
+              onClick={() => commitColor(color)}
+            />
+          ))}
+        </div>
+      ) : null}
       {showPalette ? (
         <div className="mini-palette">
           {[...nodePalette, ...generatedPalette].slice(0, 256).map((color, index) => (

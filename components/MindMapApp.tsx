@@ -152,10 +152,30 @@ type PanState = {
   startY: number;
 };
 
+type CanvasPointer = {
+  clientX: number;
+  clientY: number;
+};
+
+type PinchState = {
+  startDistance: number;
+  startScale: number;
+  worldCenterX: number;
+  worldCenterY: number;
+};
+
+type BranchColorScope = "selected" | "children" | "level" | "all";
+
 const initialSnapshot: MindMapSnapshot = {
   title: "新しいマインドマップ",
   nodes: [],
 };
+
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 2.5;
+const ZOOM_STEP = 0.1;
+const DEFAULT_BRANCH_COLOR = "#38bdf8";
+const RECENT_BRANCH_COLORS_KEY = "mindmap:recent-branch-colors";
 
 export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const [userName, setUserNameState] = useState("ゲスト");
@@ -186,6 +206,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const [isRestoringVersion, setIsRestoringVersion] = useState(false);
   const [adminTokenValue, setAdminTokenValue] = useState("");
   const [isDocumentImportOpen, setIsDocumentImportOpen] = useState(false);
+  const [recentBranchColors, setRecentBranchColors] = useState<string[]>([]);
 
   const docRef = useRef<Y.Doc | null>(null);
   const undoManagerRef = useRef<Y.UndoManager | null>(null);
@@ -195,6 +216,8 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const panRef = useRef<PanState | null>(null);
+  const activePointersRef = useRef<Map<number, CanvasPointer>>(new Map());
+  const pinchRef = useRef<PinchState | null>(null);
   const userNameRef = useRef("ゲスト");
   const canEditRef = useRef(false);
   const versionTimerRef = useRef<number | null>(null);
@@ -242,6 +265,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     userNameRef.current = initialName;
     setAdminTokenValue(getAdminToken());
     setShowGuide(window.localStorage.getItem("mindmap:guide-seen") !== "yes");
+    setRecentBranchColors(readRecentBranchColors());
   }, []);
 
   useEffect(() => {
@@ -579,6 +603,81 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     [canEdit, selectedNodes, transact],
   );
 
+  const branchColorTargetIds = useCallback(
+    (scope: BranchColorScope) => {
+      const unique = new Set<string>();
+      const addIncomingLine = (node: MindNode) => {
+        if (node.parentId) {
+          unique.add(node.id);
+          return;
+        }
+        for (const child of getChildren(snapshot.nodes, node.id)) {
+          unique.add(child.id);
+        }
+      };
+
+      if (scope === "all") {
+        snapshot.nodes.forEach((node) => {
+          if (node.parentId) unique.add(node.id);
+        });
+      } else if (scope === "children") {
+        const bases = selectedNodes.length ? selectedNodes : selectedNode ? [selectedNode] : [];
+        bases.forEach((node) => {
+          collectDescendantIds(snapshot.nodes, node.id).forEach((id) => {
+            const target = nodesById.get(id);
+            if (target?.parentId) unique.add(id);
+          });
+        });
+      } else if (scope === "level") {
+        const base = selectedNode ?? selectedNodes[0];
+        if (base?.parentId === null) {
+          getChildren(snapshot.nodes, base.id).forEach((node) => unique.add(node.id));
+        } else if (base) {
+          const depth = getDepth(snapshot.nodes, base.id);
+          snapshot.nodes.forEach((node) => {
+            if (node.parentId && getDepth(snapshot.nodes, node.id) === depth) unique.add(node.id);
+          });
+        }
+      } else {
+        const bases = selectedNodes.length ? selectedNodes : selectedNode ? [selectedNode] : [];
+        bases.forEach(addIncomingLine);
+      }
+
+      return Array.from(unique);
+    },
+    [nodesById, selectedNode, selectedNodes, snapshot.nodes],
+  );
+
+  const applyBranchColor = useCallback(
+    (color: string, scope: BranchColorScope) => {
+      const normalizedColor = normalizeHexColor(color);
+      if (!canEdit || !normalizedColor) return;
+      const targetIds = branchColorTargetIds(scope);
+      if (!targetIds.length) return;
+      undoManagerRef.current?.stopCapturing();
+      transact((doc) => {
+        const nodes = getNodesMap(doc);
+        for (const id of targetIds) {
+          const yNode = nodes.get(id);
+          if (!yNode) continue;
+          yNode.set("branchColor", normalizedColor);
+          yNode.set("updatedAt", Date.now());
+        }
+      });
+      undoManagerRef.current?.stopCapturing();
+      setRecentBranchColors((current) => saveRecentBranchColor(normalizedColor, current));
+      setToast(scope === "selected" ? "線の色を変更しました" : "線の色を一括変更しました");
+    },
+    [branchColorTargetIds, canEdit, transact],
+  );
+
+  const resetBranchColor = useCallback(
+    (scope: BranchColorScope) => {
+      applyBranchColor(DEFAULT_BRANCH_COLOR, scope);
+    },
+    [applyBranchColor],
+  );
+
   const copyStyle = useCallback(() => {
     if (!selectedNode) return;
     setCopiedStyle(normalizeStyle(selectedNode.style, selectedNode.color));
@@ -869,15 +968,28 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   }, [addChild, deleteNode, redo, undo]);
 
   const zoomBy = useCallback((amount: number) => {
-    setTransform((current) => ({
-      ...current,
-      scale: Math.min(2.2, Math.max(0.35, current.scale + amount)),
-    }));
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const point = rect ? { x: rect.width / 2, y: rect.height / 2 } : { x: 0, y: 0 };
+    setTransform((current) => zoomTransformAtPoint(current, current.scale + amount, point));
   }, []);
 
-  const resetView = useCallback(() => {
-    setTransform({ x: -3000, y: -3300, scale: 0.9 });
+  const resetZoom = useCallback(() => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const point = rect ? { x: rect.width / 2, y: rect.height / 2 } : { x: 0, y: 0 };
+    setTransform((current) => zoomTransformAtPoint(current, 1, point));
   }, []);
+
+  const fitVisibleNodes = useCallback(() => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect || !visibleNodes.length) return;
+    const bounds = calculateBounds(visibleNodes);
+    const nextScale = clampZoom(Math.min(rect.width / bounds.width, rect.height / bounds.height) * 0.92);
+    setTransform({
+      scale: nextScale,
+      x: rect.width / 2 - (bounds.minX + bounds.width / 2) * nextScale,
+      y: rect.height / 2 - (bounds.minY + bounds.height / 2) * nextScale,
+    });
+  }, [visibleNodes]);
 
   const canvasToWorld = useCallback(
     (clientX: number, clientY: number) => {
@@ -896,6 +1008,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       if (!canEdit) return;
       const target = event.target as HTMLElement;
       if (target.closest("textarea,button,input")) return;
+      if (event.pointerType !== "mouse" && activePointersRef.current.size > 0) return;
       undoManagerRef.current?.stopCapturing();
       event.currentTarget.setPointerCapture(event.pointerId);
       setSelectedNodeId(node.id);
@@ -919,6 +1032,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const moveNodeDrag = useCallback(
     (event: React.PointerEvent) => {
       const drag = dragRef.current;
+      if (activePointersRef.current.size > 1) return;
       if (!drag || drag.pointerId !== event.pointerId || !canEdit) return;
       const dx = Math.max((event.clientX - drag.startX) / transform.scale, drag.minDx);
       const dy = (event.clientY - drag.startY) / transform.scale;
@@ -943,7 +1057,27 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     }
   }, []);
 
+  const startPinch = useCallback(() => {
+    const metrics = pinchMetrics(activePointersRef.current, canvasRef.current);
+    if (!metrics || metrics.distance < 4) return;
+    pinchRef.current = {
+      startDistance: metrics.distance,
+      startScale: transform.scale,
+      worldCenterX: (metrics.centerX - transform.x) / transform.scale,
+      worldCenterY: (metrics.centerY - transform.y) / transform.scale,
+    };
+  }, [transform.scale, transform.x, transform.y]);
+
   const startPan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    activePointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    if (activePointersRef.current.size >= 2) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      panRef.current = null;
+      dragRef.current = null;
+      startPinch();
+      return;
+    }
+
     if ((event.target as HTMLElement).closest(".mind-node")) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     panRef.current = {
@@ -953,9 +1087,27 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       startX: transform.x,
       startY: transform.y,
     };
-  }, [transform.x, transform.y]);
+  }, [startPinch, transform.x, transform.y]);
 
   const movePan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointersRef.current.has(event.pointerId)) {
+      activePointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    }
+
+    const pinch = pinchRef.current;
+    if (pinch && activePointersRef.current.size >= 2) {
+      event.preventDefault();
+      const metrics = pinchMetrics(activePointersRef.current, canvasRef.current);
+      if (!metrics || pinch.startDistance <= 0) return;
+      const nextScale = clampZoom(pinch.startScale * (metrics.distance / pinch.startDistance));
+      setTransform({
+        scale: nextScale,
+        x: metrics.centerX - pinch.worldCenterX * nextScale,
+        y: metrics.centerY - pinch.worldCenterY * nextScale,
+      });
+      return;
+    }
+
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
     setTransform((current) => ({
@@ -966,6 +1118,10 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   }, []);
 
   const endPan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    activePointersRef.current.delete(event.pointerId);
+    if (activePointersRef.current.size < 2) {
+      pinchRef.current = null;
+    }
     if (panRef.current?.pointerId === event.pointerId) {
       panRef.current = null;
     }
@@ -980,12 +1136,13 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   );
 
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
-    if (!event.ctrlKey && Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
     event.preventDefault();
-    setTransform((current) => ({
-      ...current,
-      scale: Math.min(2.2, Math.max(0.35, current.scale + (event.deltaY > 0 ? -0.08 : 0.08))),
-    }));
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    const zoomFactor = Math.exp(-delta * 0.001);
+    setTransform((current) => zoomTransformAtPoint(current, current.scale * zoomFactor, point));
   }, []);
 
   const loadShareLinks = useCallback(async () => {
@@ -1604,15 +1761,18 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
           </div>
 
           <div className="zoom-controls">
-            <button type="button" onClick={() => zoomBy(-0.1)} aria-label="縮小">
+            <button type="button" onClick={() => zoomBy(-ZOOM_STEP)} aria-label="縮小">
               <ZoomOut size={17} />
             </button>
-            <button type="button" onClick={resetView} aria-label="表示を戻す">
-              <Maximize size={17} />
+            <button type="button" className="zoom-percent" onClick={resetZoom} aria-label="拡大率を100%に戻す">
               {Math.round(transform.scale * 100)}%
             </button>
-            <button type="button" onClick={() => zoomBy(0.1)} aria-label="拡大">
+            <button type="button" onClick={() => zoomBy(ZOOM_STEP)} aria-label="拡大">
               <ZoomIn size={17} />
+            </button>
+            <button type="button" onClick={fitVisibleNodes} aria-label="全体を表示">
+              <Maximize size={17} />
+              全体
             </button>
           </div>
 
@@ -1639,9 +1799,12 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
           hasCopiedStyle={Boolean(copiedStyle)}
           onPatchStyle={patchSelectedStyles}
           onPatchNode={patchSelectedNodeFields}
+          onPatchBranchColor={applyBranchColor}
+          onResetBranchColor={resetBranchColor}
           onCopyStyle={copyStyle}
           onPasteStyle={pasteStyle}
           onApplyScope={applyStyleScope}
+          recentBranchColors={recentBranchColors}
           onClose={() => setIsStyleOpen(false)}
         />
       ) : (
@@ -1806,6 +1969,68 @@ function branchPath(parent: MindNode, child: MindNode) {
   const c1 = startX + (rightSide ? bend : -bend);
   const c2 = endX - (rightSide ? bend : -bend);
   return `M ${startX} ${startY} C ${c1} ${startY}, ${c2} ${endY}, ${endX} ${endY}`;
+}
+
+function clampZoom(value: number) {
+  return Math.round(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value)) * 1000) / 1000;
+}
+
+function zoomTransformAtPoint(current: Transform, nextScaleValue: number, point: { x: number; y: number }): Transform {
+  const nextScale = clampZoom(nextScaleValue);
+  const worldX = (point.x - current.x) / current.scale;
+  const worldY = (point.y - current.y) / current.scale;
+  return {
+    scale: nextScale,
+    x: point.x - worldX * nextScale,
+    y: point.y - worldY * nextScale,
+  };
+}
+
+function pinchMetrics(pointers: Map<number, CanvasPointer>, element: HTMLElement | null) {
+  if (!element || pointers.size < 2) return null;
+  const rect = element.getBoundingClientRect();
+  const [first, second] = Array.from(pointers.values()).slice(0, 2);
+  const firstX = first.clientX - rect.left;
+  const firstY = first.clientY - rect.top;
+  const secondX = second.clientX - rect.left;
+  const secondY = second.clientY - rect.top;
+  return {
+    centerX: (firstX + secondX) / 2,
+    centerY: (firstY + secondY) / 2,
+    distance: Math.hypot(secondX - firstX, secondY - firstY),
+  };
+}
+
+function normalizeHexColor(value: string) {
+  const trimmed = value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed.toLowerCase();
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+    const [, r, g, b] = trimmed;
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  return "";
+}
+
+function readRecentBranchColors() {
+  try {
+    const raw = window.localStorage.getItem(RECENT_BRANCH_COLORS_KEY);
+    const colors = raw ? (JSON.parse(raw) as string[]) : [];
+    return colors.map(normalizeHexColor).filter(Boolean).slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentBranchColor(color: string, current: string[]) {
+  const normalizedColor = normalizeHexColor(color);
+  if (!normalizedColor) return current;
+  const next = [normalizedColor, ...current.filter((item) => item !== normalizedColor)].slice(0, 10);
+  try {
+    window.localStorage.setItem(RECENT_BRANCH_COLORS_KEY, JSON.stringify(next));
+  } catch {
+    // localStorage is optional; the color change itself is already saved in Yjs.
+  }
+  return next;
 }
 
 function statusLabel(status: ConnectionStatus, synced: boolean) {

@@ -842,6 +842,10 @@ a {
   right: 16px;
 }
 
+.zoom-percent {
+  min-width: 64px;
+}
+
 .selection-panel {
   left: 16px;
   max-width: min(520px, calc(100% - 190px));
@@ -1042,6 +1046,27 @@ a {
   display: grid;
   grid-template-columns: repeat(16, minmax(14px, 1fr));
   gap: 4px;
+}
+
+.recent-colors {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recent-colors span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.recent-colors button {
+  width: 24px;
+  min-height: 24px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  padding: 0;
 }
 
 .mini-palette button {
