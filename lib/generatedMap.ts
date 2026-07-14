@@ -65,7 +65,7 @@ export function generatedNodesToMindNodes(items: GeneratedMindMapNode[], options
           summary: item.summary,
         },
         importance: item.importance ?? "medium",
-        x: anchorX + depth * 290,
+        x: anchorX + 300,
         y: anchorY + (index + (options.startIndex ?? 0)) * 130,
         color,
         branchColor: nodePalette[(depth + 1) % nodePalette.length],

@@ -67,7 +67,7 @@ export function DocumentImportDialog({
   const [file, setFile] = useState<File | null>(null);
   const [method, setMethod] = useState<DocumentGenerationMethod>("brief");
   const [detail, setDetail] = useState<"short" | "normal" | "deep">("normal");
-  const [maxDepth, setMaxDepth] = useState(4);
+  const [maxDepth, setMaxDepth] = useState(6);
   const [maxTopLevel, setMaxTopLevel] = useState(8);
   const [maxChildren, setMaxChildren] = useState(8);
   const [customInstruction, setCustomInstruction] = useState("");
@@ -329,7 +329,7 @@ export function DocumentImportDialog({
               </label>
               <label className="field">
                 <span>階層の深さ</span>
-                <input type="number" min={2} max={4} value={maxDepth} onChange={(event) => setMaxDepth(Number(event.target.value))} />
+                <input type="number" min={2} max={6} value={maxDepth} onChange={(event) => setMaxDepth(Number(event.target.value))} />
               </label>
               <label className="field">
                 <span>大項目</span>

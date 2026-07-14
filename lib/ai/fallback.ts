@@ -11,12 +11,13 @@ type OutlineItem = {
 
 export function generateFallbackMap(document: ExtractedDocument, options: DocumentGenerationOptions): GeneratedMindMap {
   const outline = outlineFromText(document.text);
+  const title = inferTitle(document.text, document.name);
   const nodes =
-    outline.length >= 2
+    outline.length >= 1
       ? buildFromOutline(outline, options)
       : buildFromParagraphs(document.text, options);
   const raw = {
-    title: inferTitle(document.text, document.name),
+    title,
     summary: summarizeParagraph(document.text, options.detail === "deep" ? 360 : 220),
     sourceName: document.name,
     children: nodes,
@@ -46,37 +47,50 @@ function outlineFromText(text: string) {
       return;
     }
 
-    paragraph = paragraph ? `${paragraph} ${line}` : line;
-    const headingMatch = line.match(/^(#{1,4})\s+(.+)$/);
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
     const bulletMatch = line.match(/^(\s*)([-*・●○]|[0-9０-９]+[.)．、])\s+(.+)$/);
     const numberedHeading = line.match(/^([第]?\d+|[第]?[一二三四五六七八九十]+)[章部節項]\s*[：:、.．]?\s*(.+)$/);
 
     if (headingMatch) {
+      const markdownLevel = headingMatch[1].length;
+      if (markdownLevel === 1) {
+        paragraph = "";
+        return;
+      }
       items.push({
-        level: Math.min(4, headingMatch[1].length),
+        level: Math.min(5, markdownLevel - 1),
         title: cleanTitle(headingMatch[2]),
-        paragraph,
+        paragraph: line,
         index: paragraphIndex,
       });
+      paragraph = line;
     } else if (bulletMatch) {
       const indent = Math.floor((bulletMatch[1]?.length ?? 0) / 2);
       items.push({
-        level: Math.min(4, indent + 2),
+        level: Math.min(5, indent + 1),
         title: cleanTitle(bulletMatch[3]),
-        paragraph,
+        paragraph: line,
         index: paragraphIndex,
       });
+      paragraph = line;
     } else if (numberedHeading) {
       items.push({
         level: 1,
         title: cleanTitle(numberedHeading[2]),
-        paragraph,
+        paragraph: line,
         index: paragraphIndex,
       });
+      paragraph = line;
+    } else {
+      paragraph = paragraph ? `${paragraph} ${line}` : line;
+      const lastItem = items[items.length - 1];
+      if (lastItem) {
+        lastItem.paragraph = `${lastItem.paragraph} ${line}`.trim();
+      }
     }
   });
 
-  return dedupeItems(items);
+  return items;
 }
 
 function buildFromOutline(outline: OutlineItem[], options: DocumentGenerationOptions) {
@@ -149,7 +163,7 @@ function inferTitle(text: string, documentName: string) {
   const firstLine = text
     .split("\n")
     .map((line) => line.trim())
-    .find((line) => line.length >= 4 && line.length <= 80);
+    .find((line) => line.length >= 4 && line.length <= 80 && !line.startsWith("#"));
   return cleanTitle(firstLine || documentName.replace(/\.[^.]+$/, ""), 64);
 }
 
@@ -165,16 +179,6 @@ function summarizeParagraph(text: string, limit = 180) {
   const compact = text.replace(/\s+/g, " ").trim();
   if (compact.length <= limit) return compact;
   return `${compact.slice(0, limit - 1)}…`;
-}
-
-function dedupeItems(items: OutlineItem[]) {
-  const seen = new Set<string>();
-  return items.filter((item) => {
-    const key = item.title.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function dedupeStrings(values: string[]) {

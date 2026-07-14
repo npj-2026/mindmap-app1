@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     const options: DocumentGenerationOptions = {
       method,
       detail: detailOption(stringOption(formData.get("detail"))),
-      maxDepth: numberOption(formData.get("maxDepth"), 4, 2, 4),
+      maxDepth: numberOption(formData.get("maxDepth"), 6, 2, 6),
       maxTopLevel: numberOption(formData.get("maxTopLevel"), 8, 1, 12),
       maxChildren: numberOption(formData.get("maxChildren"), 8, 1, 12),
       customInstruction: stringOption(formData.get("customInstruction")).slice(0, 500),

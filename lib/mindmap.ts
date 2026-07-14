@@ -298,8 +298,11 @@ export function autoLayout(snapshot: MindMapSnapshot): MindMapSnapshot {
   root.x = 4100;
   root.y = 4200;
 
-  layoutSide(nodes, right, 1, root.x + 360, root.y, 1);
-  layoutSide(nodes, left, 1, root.x - 360, root.y, -1);
+  const subtreeSpan = new Map<string, number>();
+  measureSubtreeSpan(nodes, rootId, subtreeSpan);
+
+  layoutSide(nodes, right, root.x + 360, root.y, 1, subtreeSpan);
+  layoutSide(nodes, left, root.x - 360, root.y, -1, subtreeSpan);
 
   return { ...snapshot, nodes };
 }
@@ -307,24 +310,24 @@ export function autoLayout(snapshot: MindMapSnapshot): MindMapSnapshot {
 function layoutSide(
   nodes: MindNode[],
   group: MindNode[],
-  depth: number,
   anchorX: number,
   anchorY: number,
   direction: 1 | -1,
+  subtreeSpan: Map<string, number>,
 ) {
-  const averageSpacing =
-    group.reduce((total, node) => total + (node.style?.siblingSpacing ?? 130), 0) /
-    Math.max(1, group.length);
-  const spacingY = Math.max(averageSpacing, 560 / Math.max(1, group.length));
-  const startY = anchorY - ((group.length - 1) * spacingY) / 2;
+  const spacingY = 150;
+  const totalSpan = group.reduce((total, node) => total + (subtreeSpan.get(node.id) ?? 1), 0);
+  let cursorY = anchorY - ((Math.max(1, totalSpan) - 1) * spacingY) / 2;
 
-  group.forEach((node, index) => {
+  group.forEach((node) => {
+    const span = subtreeSpan.get(node.id) ?? 1;
     node.x = anchorX;
-    node.y = startY + index * spacingY;
+    node.y = cursorY + ((span - 1) * spacingY) / 2;
     const children = getChildren(nodes, node.id);
     if (children.length) {
-      layoutSide(nodes, children, depth + 1, anchorX + direction * 290, node.y, direction);
+      layoutSide(nodes, children, anchorX + direction * 300, node.y, direction, subtreeSpan);
     }
+    cursorY += span * spacingY;
   });
 }
 
@@ -333,7 +336,20 @@ export function levelLabel(depth: number) {
   if (depth === 1) return "大項目";
   if (depth === 2) return "中項目";
   if (depth === 3) return "小項目";
+  if (depth === 4) return "詳細項目";
+  if (depth === 5) return "具体的内容";
   return "項目";
+}
+
+function measureSubtreeSpan(nodes: MindNode[], nodeId: string, result: Map<string, number>): number {
+  const children = getChildren(nodes, nodeId);
+  if (!children.length) {
+    result.set(nodeId, 1);
+    return 1;
+  }
+  const span = children.reduce((total, child) => total + measureSubtreeSpan(nodes, child.id, result), 0);
+  result.set(nodeId, Math.max(1, span));
+  return Math.max(1, span);
 }
 
 function stringValue(value: unknown, fallback: string) {
