@@ -80,6 +80,9 @@ export type MindNode = {
   id: string;
   parentId: string | null;
   text: string;
+  summary?: string;
+  source?: NodeSourceReference;
+  importance?: "high" | "medium" | "low";
   x: number;
   y: number;
   color: string;
@@ -90,6 +93,13 @@ export type MindNode = {
   style: NodeStyle;
   createdAt: number;
   updatedAt: number;
+};
+
+export type NodeSourceReference = {
+  documentName: string;
+  excerpt: string;
+  location: string;
+  summary: string;
 };
 
 export type MindMapSnapshot = {
@@ -136,6 +146,37 @@ export type MapVersion = {
   reason: string;
   checksum: string;
 };
+
+export type GeneratedMindMapNode = {
+  id?: string;
+  title: string;
+  summary: string;
+  sourceExcerpt?: string;
+  sourceLocation?: string;
+  importance?: "high" | "medium" | "low";
+  children: GeneratedMindMapNode[];
+};
+
+export type GeneratedMindMap = {
+  title: string;
+  summary: string;
+  sourceName: string;
+  aiUsed: boolean;
+  method: string;
+  children: GeneratedMindMapNode[];
+};
+
+export type DocumentGenerationMethod =
+  | "brief"
+  | "detailed"
+  | "key-points"
+  | "meeting"
+  | "business-plan"
+  | "problems-solutions"
+  | "timeline"
+  | "custom";
+
+export type DocumentGenerationApplyMode = "new" | "append" | "under-selected" | "replace";
 
 export type LiveblocksPresence = {
   cursor: { x: number; y: number } | null;

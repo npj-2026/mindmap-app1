@@ -196,6 +196,7 @@ a {
 }
 
 .primary-action,
+.secondary-action,
 .share-button,
 .theme-toggle,
 .toolbar button,
@@ -229,6 +230,11 @@ a {
   background: var(--primary);
   color: white;
   border-color: transparent;
+}
+
+.secondary-action {
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 
 .theme-toggle {
@@ -880,6 +886,37 @@ a {
   color: var(--muted);
 }
 
+.source-panel-card {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.source-panel-card strong,
+.source-panel-card p,
+.source-panel-card small,
+.source-panel-card em {
+  margin: 0;
+}
+
+.source-panel-card em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.source-panel-card p,
+.source-panel-card small {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
 .panel-section {
   border-top: 1px solid var(--line);
   padding: 10px 0;
@@ -916,6 +953,18 @@ a {
 
 .field input[type="range"] {
   width: 100%;
+}
+
+.field textarea,
+.document-textarea,
+.summary-textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 10px 12px;
+  resize: vertical;
 }
 
 .field em {
@@ -1071,6 +1120,243 @@ a {
   background: var(--surface);
   box-shadow: var(--shadow);
   padding: 20px;
+}
+
+.document-backdrop {
+  z-index: 95;
+}
+
+.document-modal {
+  width: min(1180px, calc(100vw - 28px));
+  max-height: min(860px, calc(100vh - 28px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+
+.document-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+  gap: 18px;
+}
+
+.document-form,
+.document-preview {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.step-label {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.input-tabs button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 0 12px;
+  font-weight: 800;
+}
+
+.document-textarea {
+  min-height: 190px;
+}
+
+.summary-textarea {
+  min-height: 72px;
+}
+
+.drop-zone {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  border: 2px dashed var(--line-strong);
+  border-radius: 18px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 26px 18px;
+  text-align: center;
+}
+
+.drop-zone strong {
+  color: var(--text);
+}
+
+.drop-zone button,
+.preview-toolbar button,
+.preview-node-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 10px;
+  font-weight: 800;
+}
+
+.document-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.progress-line,
+.document-warning,
+.document-hint {
+  border-radius: 12px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  padding: 10px 12px;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.document-warning {
+  background: color-mix(in srgb, var(--primary-soft) 78%, var(--surface));
+  color: var(--primary);
+}
+
+.preview-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preview-tree {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.preview-node {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 10px;
+}
+
+.preview-node.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.preview-node-main {
+  display: grid;
+  gap: 8px;
+}
+
+.preview-node-main input,
+.preview-node-main textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.preview-node-main textarea {
+  min-height: 58px;
+  resize: vertical;
+}
+
+.preview-node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preview-node-actions .danger {
+  color: var(--danger);
+}
+
+.preview-children {
+  display: grid;
+  gap: 8px;
+  margin-left: 18px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+}
+
+.source-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.source-compare div,
+.preview-empty {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 12px;
+}
+
+.source-compare strong,
+.source-compare p,
+.source-compare em {
+  margin: 0;
+}
+
+.source-compare p {
+  max-height: 120px;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.7;
+}
+
+.source-compare em {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.preview-empty {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 280px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.preview-empty strong {
+  color: var(--text);
+}
+
+.confirm-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 800;
 }
 
 .modal-head {
@@ -1344,6 +1630,16 @@ a {
     grid-template-columns: 1fr;
   }
 
+  .document-layout,
+  .source-compare {
+    grid-template-columns: 1fr;
+  }
+
+  .document-modal {
+    max-height: calc(100vh - 20px);
+    padding: 16px;
+  }
+
   .history-list {
     max-height: 240px;
   }
@@ -1462,5 +1758,14 @@ a {
 
   .delete-actions button {
     width: 100%;
+  }
+
+  .document-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-children {
+    margin-left: 8px;
+    padding-left: 8px;
   }
 }

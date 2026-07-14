@@ -44,6 +44,9 @@ import {
 import type {
   AccessMode,
   ConnectionStatus,
+  DocumentGenerationApplyMode,
+  GeneratedMindMap,
+  GeneratedMindMapNode,
   LiveblocksPresence,
   MindMapSnapshot,
   MindNode,
@@ -91,7 +94,9 @@ import {
 import { nodePalette } from "@/lib/colors";
 import { StylePanel } from "@/components/StylePanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { DocumentImportDialog } from "@/components/DocumentImportDialog";
 import { defaultNodeStyle, normalizeStyle } from "@/lib/stylePresets";
+import { generatedMapToSnapshot, generatedNodesToMindNodes } from "@/lib/generatedMap";
 import {
   backgroundCss,
   borderCssStyle,
@@ -177,6 +182,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const [previewVersion, setPreviewVersion] = useState<MapVersion | null>(null);
   const [isRestoringVersion, setIsRestoringVersion] = useState(false);
   const [adminTokenValue, setAdminTokenValue] = useState("");
+  const [isDocumentImportOpen, setIsDocumentImportOpen] = useState(false);
 
   const docRef = useRef<Y.Doc | null>(null);
   const undoManagerRef = useRef<Y.UndoManager | null>(null);
@@ -921,6 +927,70 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     window.location.href = data.editUrl;
   }, [snapshot]);
 
+  const applyGeneratedMap = useCallback(
+    async (map: GeneratedMindMap, applyMode: DocumentGenerationApplyMode) => {
+      if (applyMode === "new") {
+        const response = await fetch("/api/maps", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: map.title || "資料から作成" }),
+        });
+        const data = (await response.json()) as ShareLinks & { title: string; message?: string };
+        if (!response.ok || !data.editUrl) throw new Error(data.message || "新規マップを作成できませんでした。");
+        window.localStorage.setItem(pendingImportKey(data.roomId), JSON.stringify(generatedMapToSnapshot(map)));
+        saveCreatedLinks(data);
+        window.location.href = data.editUrl;
+        return;
+      }
+
+      if (!canEdit) {
+        throw new Error("閲覧専用では現在のマップへ反映できません。");
+      }
+
+      const parent = applyMode === "under-selected"
+        ? selectedNode ?? nodesById.get(ROOT_NODE_ID)
+        : nodesById.get(ROOT_NODE_ID) ?? snapshot.nodes.find((node) => node.parentId === null);
+      if (!parent) throw new Error("追加先のノードが見つかりません。");
+
+      undoManagerRef.current?.stopCapturing();
+      if (applyMode === "replace") {
+        transact((doc) => replaceDocument(doc, generatedMapToSnapshot(map), LOCAL_ORIGIN));
+        undoManagerRef.current?.stopCapturing();
+        selectNode(ROOT_NODE_ID);
+        setToast("資料からマップを置き換えました");
+        return;
+      }
+
+      const fallbackNode: GeneratedMindMapNode = {
+        title: map.title || "資料から作成",
+        summary: map.summary,
+        sourceExcerpt: map.summary,
+        sourceLocation: "全体",
+        importance: "high",
+        children: map.children,
+      };
+      const generatedNodes = generatedNodesToMindNodes(map.children.length ? map.children : [fallbackNode], {
+        parentId: parent.id,
+        parentX: parent.x,
+        parentY: parent.y,
+        sourceName: map.sourceName,
+        startIndex: getChildren(snapshot.nodes, parent.id).length,
+      });
+
+      transact((doc) => {
+        const nodes = getNodesMap(doc);
+        for (const node of generatedNodes) {
+          nodes.set(node.id, createNodeMap(node));
+        }
+        nodes.get(parent.id)?.set("collapsed", false);
+      });
+      undoManagerRef.current?.stopCapturing();
+      selectNode(generatedNodes[0]?.id ?? parent.id);
+      setToast("資料からノードを追加しました");
+    },
+    [canEdit, nodesById, selectNode, selectedNode, snapshot.nodes, transact],
+  );
+
   const exportJson = useCallback(() => {
     const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
     downloadBlob(blob, `${safeFileName(snapshot.title)}.json`);
@@ -1050,6 +1120,10 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         </div>
         <div className="rail-section">
           <div className="rail-title">テンプレート</div>
+          <button type="button" onClick={() => setIsDocumentImportOpen(true)}>
+            <FileText size={16} />
+            資料から作成
+          </button>
           <button type="button" onClick={() => loadSampleMap(transact)}>
             <Sparkles size={16} />
             サンプルマップ
@@ -1175,6 +1249,10 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
             <button type="button" onClick={runAutoLayout} disabled={!canEdit}>
               <Sparkles size={17} />
               自動整列
+            </button>
+            <button type="button" onClick={() => setIsDocumentImportOpen(true)}>
+              <FileText size={17} />
+              資料から作成
             </button>
             <button type="button" onClick={() => setIsHistoryOpen(true)} title="履歴を開く">
               <History size={17} />
@@ -1441,6 +1519,15 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       )}
 
       {toast ? <div className="toast">{toast}</div> : null}
+
+      <DocumentImportDialog
+        open={isDocumentImportOpen}
+        context="map"
+        canEdit={canEdit}
+        selectedNodeName={selectedNode?.text}
+        onClose={() => setIsDocumentImportOpen(false)}
+        onApply={applyGeneratedMap}
+      />
 
       {isHistoryOpen ? (
         <div className="modal-backdrop" role="presentation" onClick={() => setIsHistoryOpen(false)}>

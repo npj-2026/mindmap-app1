@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { defaultNodeStyle, normalizeStyle } from "@/lib/stylePresets";
-import type { MindMapSnapshot, MindNode, NodeStyle } from "@/types/mindmap";
+import type { MindMapSnapshot, MindNode, NodeSourceReference, NodeStyle } from "@/types/mindmap";
 
 export const ROOT_NODE_ID = "root";
 export const NODE_WIDTH = 188;
@@ -19,6 +19,9 @@ export function createNodeMap(node: MindNode) {
   yNode.set("id", node.id);
   yNode.set("parentId", node.parentId);
   yNode.set("text", text);
+  if (node.summary) yNode.set("summary", node.summary);
+  if (node.source) yNode.set("source", node.source);
+  if (node.importance) yNode.set("importance", node.importance);
   yNode.set("x", node.x);
   yNode.set("y", node.y);
   yNode.set("color", node.color);
@@ -49,6 +52,9 @@ export function newNode(
     id: values.id,
     parentId: values.parentId,
     text: values.text,
+    summary: values.summary,
+    source: values.source,
+    importance: values.importance,
     x: values.x,
     y: values.y,
     color: values.color ?? "#2563eb",
@@ -79,6 +85,9 @@ export function readNode(yNode: Y.Map<unknown>): MindNode {
     id: String(yNode.get("id")),
     parentId: typeof yNode.get("parentId") === "string" ? String(yNode.get("parentId")) : null,
     text: text instanceof Y.Text ? text.toString() : String(text ?? ""),
+    summary: optionalString(yNode.get("summary")),
+    source: sourceValue(yNode.get("source")),
+    importance: importanceValue(yNode.get("importance")),
     x: numberValue(yNode.get("x"), 0),
     y: numberValue(yNode.get("y"), 0),
     color: legacyColor,
@@ -331,6 +340,25 @@ function stringValue(value: unknown, fallback: string) {
   return typeof value === "string" ? value : fallback;
 }
 
+function optionalString(value: unknown) {
+  return typeof value === "string" && value ? value : undefined;
+}
+
 function numberValue(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function importanceValue(value: unknown): MindNode["importance"] {
+  return value === "high" || value === "medium" || value === "low" ? value : undefined;
+}
+
+function sourceValue(value: unknown): NodeSourceReference | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Partial<NodeSourceReference>;
+  return {
+    documentName: stringValue(source.documentName, "資料"),
+    excerpt: stringValue(source.excerpt, ""),
+    location: stringValue(source.location, ""),
+    summary: stringValue(source.summary, ""),
+  };
 }

@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Copy,
   ExternalLink,
+  FileText,
   Loader2,
   MoreHorizontal,
   Plus,
@@ -18,12 +19,16 @@ import {
   getAdminToken,
   getRecentMaps,
   getUserName,
+  pendingImportKey,
   removeRecentMap,
   saveCreatedLinks,
   setAdminToken,
   setUserName,
 } from "@/lib/local";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { DocumentImportDialog } from "@/components/DocumentImportDialog";
+import { generatedMapToSnapshot } from "@/lib/generatedMap";
+import type { DocumentGenerationApplyMode, GeneratedMindMap } from "@/types/mindmap";
 
 type CreateRoomResponse = {
   roomId: string;
@@ -70,6 +75,7 @@ export function HomePage() {
   const [deleteConfirmName, setDeleteConfirmName] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isDocumentImportOpen, setIsDocumentImportOpen] = useState(false);
 
   useEffect(() => {
     setName(getUserName());
@@ -191,6 +197,23 @@ export function HomePage() {
     }
   }
 
+  async function createMapFromDocument(map: GeneratedMindMap, mode: DocumentGenerationApplyMode) {
+    if (mode !== "new") return;
+    setNotice("");
+    const response = await fetch("/api/maps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: map.title || "資料から作成" }),
+    });
+    const data = (await response.json()) as CreateRoomResponse;
+    if (!response.ok || !data.editUrl) {
+      throw new Error(data.message || "マップを作成できませんでした。");
+    }
+    window.localStorage.setItem(pendingImportKey(data.roomId), JSON.stringify(generatedMapToSnapshot(map)));
+    saveCreatedLinks({ ...data, title: data.title });
+    window.location.href = data.editUrl;
+  }
+
   return (
     <main className="home">
       <header className="home-topbar">
@@ -223,6 +246,10 @@ export function HomePage() {
           <button className="primary-action" onClick={createMap} disabled={isCreating}>
             {isCreating ? <Loader2 className="spin" size={18} /> : <Plus size={18} />}
             新しいマップを作成
+          </button>
+          <button className="secondary-action" type="button" onClick={() => setIsDocumentImportOpen(true)}>
+            <FileText size={18} />
+            資料から作成
           </button>
           {error ? <p className="error-text">{error}</p> : null}
           {notice ? <p className="notice">{notice}</p> : null}
@@ -382,6 +409,12 @@ export function HomePage() {
           </div>
         </div>
       ) : null}
+      <DocumentImportDialog
+        open={isDocumentImportOpen}
+        context="home"
+        onClose={() => setIsDocumentImportOpen(false)}
+        onApply={createMapFromDocument}
+      />
     </main>
   );
 }

@@ -1,0 +1,188 @@
+import type { GeneratedMindMap, GeneratedMindMapNode } from "@/types/mindmap";
+import { generationMethodLabels, type DocumentGenerationOptions, type ExtractedDocument } from "@/lib/ai/types";
+import { validateGeneratedMap } from "@/lib/ai/validate";
+
+type OutlineItem = {
+  level: number;
+  title: string;
+  paragraph: string;
+  index: number;
+};
+
+export function generateFallbackMap(document: ExtractedDocument, options: DocumentGenerationOptions): GeneratedMindMap {
+  const outline = outlineFromText(document.text);
+  const nodes =
+    outline.length >= 2
+      ? buildFromOutline(outline, options)
+      : buildFromParagraphs(document.text, options);
+  const raw = {
+    title: inferTitle(document.text, document.name),
+    summary: summarizeParagraph(document.text, options.detail === "deep" ? 360 : 220),
+    sourceName: document.name,
+    children: nodes,
+  };
+
+  return validateGeneratedMap(raw, {
+    sourceName: document.name,
+    method: generationMethodLabels[options.method],
+    aiUsed: false,
+    maxDepth: options.maxDepth,
+    maxTopLevel: options.maxTopLevel,
+    maxChildren: options.maxChildren,
+  }).map;
+}
+
+function outlineFromText(text: string) {
+  const lines = text.split("\n");
+  const items: OutlineItem[] = [];
+  let paragraph = "";
+  let paragraphIndex = 1;
+
+  lines.forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) {
+      if (paragraph) paragraphIndex += 1;
+      paragraph = "";
+      return;
+    }
+
+    paragraph = paragraph ? `${paragraph} ${line}` : line;
+    const headingMatch = line.match(/^(#{1,4})\s+(.+)$/);
+    const bulletMatch = line.match(/^(\s*)([-*・●○]|[0-9０-９]+[.)．、])\s+(.+)$/);
+    const numberedHeading = line.match(/^([第]?\d+|[第]?[一二三四五六七八九十]+)[章部節項]\s*[：:、.．]?\s*(.+)$/);
+
+    if (headingMatch) {
+      items.push({
+        level: Math.min(4, headingMatch[1].length),
+        title: cleanTitle(headingMatch[2]),
+        paragraph,
+        index: paragraphIndex,
+      });
+    } else if (bulletMatch) {
+      const indent = Math.floor((bulletMatch[1]?.length ?? 0) / 2);
+      items.push({
+        level: Math.min(4, indent + 2),
+        title: cleanTitle(bulletMatch[3]),
+        paragraph,
+        index: paragraphIndex,
+      });
+    } else if (numberedHeading) {
+      items.push({
+        level: 1,
+        title: cleanTitle(numberedHeading[2]),
+        paragraph,
+        index: paragraphIndex,
+      });
+    }
+  });
+
+  return dedupeItems(items);
+}
+
+function buildFromOutline(outline: OutlineItem[], options: DocumentGenerationOptions) {
+  const rootItems: GeneratedMindMapNode[] = [];
+  const stack: Array<{ level: number; node: GeneratedMindMapNode }> = [];
+
+  for (const item of outline) {
+    const normalizedLevel = Math.min(options.maxDepth - 1, Math.max(1, item.level));
+    const node: GeneratedMindMapNode = {
+      title: item.title,
+      summary: summarizeParagraph(item.paragraph),
+      sourceExcerpt: item.paragraph.slice(0, 420),
+      sourceLocation: `段落${item.index}`,
+      importance: normalizedLevel === 1 ? "high" : normalizedLevel === 2 ? "medium" : "low",
+      children: [],
+    };
+
+    while (stack.length && stack[stack.length - 1].level >= normalizedLevel) {
+      stack.pop();
+    }
+
+    const parent = stack[stack.length - 1]?.node;
+    const siblings = parent ? parent.children : rootItems;
+    if (siblings.length < (parent ? options.maxChildren : options.maxTopLevel)) {
+      siblings.push(node);
+      stack.push({ level: normalizedLevel, node });
+    }
+  }
+
+  return rootItems;
+}
+
+function buildFromParagraphs(text: string, options: DocumentGenerationOptions) {
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter((part) => part.length >= 20);
+  const selected = dedupeStrings(paragraphs).slice(0, options.maxTopLevel);
+
+  return selected.map((paragraph, index): GeneratedMindMapNode => {
+    const sentences = paragraph
+      .split(/[。.!?！？]\s*/)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 8)
+      .slice(1, options.maxChildren + 1);
+    return {
+      title: cleanTitle(paragraph),
+      summary: summarizeParagraph(paragraph),
+      sourceExcerpt: paragraph.slice(0, 420),
+      sourceLocation: `段落${index + 1}`,
+      importance: index < 3 ? "high" : "medium",
+      children:
+        options.maxDepth > 2
+          ? sentences.map((sentence, childIndex) => ({
+              title: cleanTitle(sentence),
+              summary: sentence.slice(0, 180),
+              sourceExcerpt: sentence,
+              sourceLocation: `段落${index + 1}-${childIndex + 1}`,
+              importance: "low",
+              children: [],
+            }))
+          : [],
+    };
+  });
+}
+
+function inferTitle(text: string, documentName: string) {
+  const markdownHeading = text.match(/^#\s+(.+)$/m)?.[1];
+  if (markdownHeading) return cleanTitle(markdownHeading, 64);
+  const firstLine = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length >= 4 && line.length <= 80);
+  return cleanTitle(firstLine || documentName.replace(/\.[^.]+$/, ""), 64);
+}
+
+function cleanTitle(text: string, limit = 42) {
+  return text
+    .replace(/^[-*・●○#\s\d０-９.)．、]+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, limit) || "項目";
+}
+
+function summarizeParagraph(text: string, limit = 180) {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit - 1)}…`;
+}
+
+function dedupeItems(items: OutlineItem[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = item.title.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function dedupeStrings(values: string[]) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = value.slice(0, 80).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}

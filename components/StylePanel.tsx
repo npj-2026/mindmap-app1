@@ -103,6 +103,16 @@ export function StylePanel({
 
       {primaryNode ? (
         <>
+          {primaryNode.source ? (
+            <section className="source-panel-card">
+              <span className="panel-eyebrow">元資料</span>
+              <strong>{primaryNode.source.documentName}</strong>
+              <em>{primaryNode.source.location}</em>
+              <p>{primaryNode.source.excerpt || "参照した文章はありません。"}</p>
+              {primaryNode.source.summary ? <small>{primaryNode.source.summary}</small> : null}
+            </section>
+          ) : null}
+
           <section className="panel-section open">
             <button type="button" className="section-toggle" onClick={() => toggle("easy")}>
               {openSections.easy ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
