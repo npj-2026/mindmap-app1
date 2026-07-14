@@ -1,5 +1,10 @@
 import { nodePalette } from "@/lib/colors";
-import { autoLayout, newNode, ROOT_NODE_ID } from "@/lib/mindmap";
+import {
+  autoLayout,
+  newNode,
+  rightChildX,
+  ROOT_NODE_ID,
+} from "@/lib/mindmap";
 import { defaultNodeStyle, normalizeStyle } from "@/lib/stylePresets";
 import type { GeneratedMindMap, GeneratedMindMapNode, MindMapSnapshot, MindNode } from "@/types/mindmap";
 
@@ -7,6 +12,7 @@ type BuildOptions = {
   parentId: string;
   parentX: number;
   parentY: number;
+  parentWidth?: number;
   sourceName: string;
   startIndex?: number;
 };
@@ -40,6 +46,7 @@ export function generatedMapToSnapshot(map: GeneratedMindMap): MindMapSnapshot {
     parentId: root.id,
     parentX: root.x,
     parentY: root.y,
+    parentWidth: root.width,
     sourceName: map.sourceName,
   });
   return autoLayout({ title: map.title || "資料から作成", nodes: [root, ...children] });
@@ -49,7 +56,14 @@ export function generatedNodesToMindNodes(items: GeneratedMindMapNode[], options
   const nodes: MindNode[] = [];
   const sourceName = options.sourceName || "資料";
 
-  function visit(children: GeneratedMindMapNode[], parentId: string, depth: number, anchorX: number, anchorY: number) {
+  function visit(
+    children: GeneratedMindMapNode[],
+    parentId: string,
+    depth: number,
+    anchorX: number,
+    anchorY: number,
+    anchorWidth: number,
+  ) {
     children.forEach((item, index) => {
       const id = crypto.randomUUID();
       const color = nodePalette[depth % nodePalette.length];
@@ -65,8 +79,9 @@ export function generatedNodesToMindNodes(items: GeneratedMindMapNode[], options
           summary: item.summary,
         },
         importance: item.importance ?? "medium",
-        x: anchorX + 300,
+        x: rightChildX({ x: anchorX, width: anchorWidth }),
         y: anchorY + (index + (options.startIndex ?? 0)) * 130,
+        collapsed: depth >= 2 && item.children.length > 0,
         color,
         branchColor: nodePalette[(depth + 1) % nodePalette.length],
         style: {
@@ -78,11 +93,18 @@ export function generatedNodesToMindNodes(items: GeneratedMindMapNode[], options
       });
       nodes.push(node);
       if (item.children?.length) {
-        visit(item.children, id, depth + 1, node.x, node.y);
+        visit(item.children, id, depth + 1, node.x, node.y, node.width);
       }
     });
   }
 
-  visit(items, options.parentId, 1, options.parentX + 320, options.parentY - items.length * 70);
+  visit(
+    items,
+    options.parentId,
+    1,
+    options.parentX,
+    options.parentY - items.length * 70,
+    options.parentWidth ?? defaultNodeStyle.minWidth,
+  );
   return nodes;
 }

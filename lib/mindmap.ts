@@ -5,8 +5,19 @@ import type { MindMapSnapshot, MindNode, NodeSourceReference, NodeStyle } from "
 export const ROOT_NODE_ID = "root";
 export const NODE_WIDTH = 188;
 export const NODE_HEIGHT = 72;
+export const RIGHT_LAYOUT_ROOT_X = 4100;
+export const RIGHT_LAYOUT_ROOT_Y = 4200;
+export const RIGHT_LAYOUT_HORIZONTAL_SPACING = 320;
+export const RIGHT_LAYOUT_VERTICAL_SPACING = 160;
 export const LOCAL_ORIGIN = "local-mindmap-change";
 export const SYSTEM_ORIGIN = "system-mindmap-change";
+
+type RightLayoutOptions = {
+  rootX?: number;
+  rootY?: number;
+  horizontalSpacing?: number;
+  verticalSpacing?: number;
+};
 
 export function now() {
   return Date.now();
@@ -149,8 +160,8 @@ export function ensureInitialDocument(doc: Y.Doc, title = "新しいマインド
           id: ROOT_NODE_ID,
           parentId: null,
           text: "中心テーマ",
-          x: 4100,
-          y: 4200,
+          x: RIGHT_LAYOUT_ROOT_X,
+          y: RIGHT_LAYOUT_ROOT_Y,
           color: "#2563eb",
           branchColor: "#38bdf8",
         }),
@@ -174,8 +185,8 @@ export function normalizeSnapshot(snapshot: MindMapSnapshot): MindMapSnapshot {
         id: ROOT_NODE_ID,
         parentId: null,
         text: "中心テーマ",
-        x: 4100,
-        y: 4200,
+        x: RIGHT_LAYOUT_ROOT_X,
+        y: RIGHT_LAYOUT_ROOT_Y,
       }),
     );
   }
@@ -257,6 +268,13 @@ export function hiddenDescendantCount(nodes: MindNode[], nodeId: string) {
   return collectDescendantIds(nodes, nodeId).length;
 }
 
+export function rightChildX(
+  parent: Pick<MindNode, "x" | "width">,
+  horizontalSpacing = RIGHT_LAYOUT_HORIZONTAL_SPACING,
+) {
+  return parent.x + Math.max(horizontalSpacing, parent.width + 96);
+}
+
 export function replaceYText(yText: Y.Text, nextValue: string) {
   const current = yText.toString();
   if (current === nextValue) return;
@@ -285,7 +303,7 @@ export function replaceYText(yText: Y.Text, nextValue: string) {
   }
 }
 
-export function autoLayout(snapshot: MindMapSnapshot): MindMapSnapshot {
+export function autoLayout(snapshot: MindMapSnapshot, options: RightLayoutOptions = {}): MindMapSnapshot {
   const nodes = snapshot.nodes.map((node) => ({ ...node, style: { ...node.style } }));
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const root = byId.get(ROOT_NODE_ID) ?? nodes.find((node) => node.parentId === null);
@@ -293,29 +311,33 @@ export function autoLayout(snapshot: MindMapSnapshot): MindMapSnapshot {
 
   const rootId = root.id;
   const children = getChildren(nodes, rootId);
-  const left = children.filter((_, index) => index % 2 === 1);
-  const right = children.filter((_, index) => index % 2 === 0);
-  root.x = 4100;
-  root.y = 4200;
+  const rootX = options.rootX ?? RIGHT_LAYOUT_ROOT_X;
+  const rootY = options.rootY ?? RIGHT_LAYOUT_ROOT_Y;
+  const horizontalSpacing = options.horizontalSpacing ?? RIGHT_LAYOUT_HORIZONTAL_SPACING;
+  const verticalSpacing = options.verticalSpacing ?? RIGHT_LAYOUT_VERTICAL_SPACING;
+  root.x = rootX;
+  root.y = rootY;
 
   const subtreeSpan = new Map<string, number>();
   measureSubtreeSpan(nodes, rootId, subtreeSpan);
 
-  layoutSide(nodes, right, root.x + 360, root.y, 1, subtreeSpan);
-  layoutSide(nodes, left, root.x - 360, root.y, -1, subtreeSpan);
+  layoutRight(nodes, children, rightChildX(root, horizontalSpacing), root.y, subtreeSpan, {
+    horizontalSpacing,
+    verticalSpacing,
+  });
 
   return { ...snapshot, nodes };
 }
 
-function layoutSide(
+function layoutRight(
   nodes: MindNode[],
   group: MindNode[],
   anchorX: number,
   anchorY: number,
-  direction: 1 | -1,
   subtreeSpan: Map<string, number>,
+  options: Required<Pick<RightLayoutOptions, "horizontalSpacing" | "verticalSpacing">>,
 ) {
-  const spacingY = 150;
+  const spacingY = options.verticalSpacing;
   const totalSpan = group.reduce((total, node) => total + (subtreeSpan.get(node.id) ?? 1), 0);
   let cursorY = anchorY - ((Math.max(1, totalSpan) - 1) * spacingY) / 2;
 
@@ -325,7 +347,7 @@ function layoutSide(
     node.y = cursorY + ((span - 1) * spacingY) / 2;
     const children = getChildren(nodes, node.id);
     if (children.length) {
-      layoutSide(nodes, children, anchorX + direction * 300, node.y, direction, subtreeSpan);
+      layoutRight(nodes, children, rightChildX(node, options.horizontalSpacing), node.y, subtreeSpan, options);
     }
     cursorY += span * spacingY;
   });
@@ -350,6 +372,15 @@ function measureSubtreeSpan(nodes: MindNode[], nodeId: string, result: Map<strin
   const span = children.reduce((total, child) => total + measureSubtreeSpan(nodes, child.id, result), 0);
   result.set(nodeId, Math.max(1, span));
   return Math.max(1, span);
+}
+
+export function hasLeftFacingNodes(nodes: MindNode[]) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return nodes.some((node) => {
+    if (!node.parentId) return false;
+    const parent = byId.get(node.parentId);
+    return Boolean(parent && node.x <= parent.x);
+  });
 }
 
 function stringValue(value: unknown, fallback: string) {

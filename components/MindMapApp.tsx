@@ -69,6 +69,7 @@ import {
   getDepth,
   getMetaMap,
   getNodesMap,
+  hasLeftFacingNodes,
   hiddenDescendantCount,
   levelLabel,
   newNode,
@@ -76,6 +77,7 @@ import {
   readNode,
   replaceDocument,
   replaceYText,
+  rightChildX,
   snapshotFromDoc,
   visibleNodeIds,
   getStyleMap,
@@ -138,6 +140,7 @@ type DragState = {
   startX: number;
   startY: number;
   moved: boolean;
+  minDx: number;
   nodes: Array<{ id: string; x: number; y: number }>;
 };
 
@@ -196,6 +199,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const canEditRef = useRef(false);
   const versionTimerRef = useRef<number | null>(null);
   const lastVersionChecksumRef = useRef("");
+  const didAutoMigrateLayoutRef = useRef(false);
 
   const canEdit = mode === "edit";
   canEditRef.current = canEdit;
@@ -376,6 +380,18 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         }
       } else {
         ensureInitialDocument(yDoc);
+      }
+      const meta = getMetaMap(yDoc);
+      const currentSnapshot = snapshotFromDoc(yDoc);
+      if (
+        canEditRef.current &&
+        !didAutoMigrateLayoutRef.current &&
+        !meta.get("rightLayoutMigratedAt") &&
+        hasLeftFacingNodes(currentSnapshot.nodes)
+      ) {
+        didAutoMigrateLayoutRef.current = true;
+        replaceDocument(yDoc, autoLayout(currentSnapshot), LOCAL_ORIGIN);
+        meta.set("rightLayoutMigratedAt", Date.now());
       }
       updateSnapshot();
       updateVersions();
@@ -611,15 +627,13 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     undoManagerRef.current?.stopCapturing();
     const depth = getDepth(snapshot.nodes, parentNode.id) + 1;
     const siblings = getChildren(snapshot.nodes, parentNode.id);
-    const root = nodesById.get(ROOT_NODE_ID);
-    const direction = parentNode.id === ROOT_NODE_ID ? (siblings.length % 2 === 0 ? 1 : -1) : root && parentNode.x < root.x ? -1 : 1;
     const id = crypto.randomUUID();
     const savedStyle = readSavedDefaultStyle();
     const child = newNode({
       id,
       parentId: parentNode.id,
       text: `${levelLabel(depth)} ${siblings.length + 1}`,
-      x: parentNode.x + direction * 280,
+      x: rightChildX(parentNode),
       y: parentNode.y + (siblings.length - (siblings.length > 0 ? (siblings.length - 1) / 2 : 0)) * parentNode.style.siblingSpacing,
       color: nodePalette[depth % nodePalette.length],
       branchColor: nodePalette[(depth + 1) % nodePalette.length],
@@ -636,7 +650,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     undoManagerRef.current?.stopCapturing();
     selectNode(id);
     setToast("子ノードを追加しました");
-  }, [canEdit, nodesById, selectNode, selectedNode, snapshot.nodes, transact]);
+  }, [canEdit, selectNode, selectedNode, snapshot.nodes, transact]);
 
   const addSibling = useCallback(() => {
     if (!selectedNode || selectedNode.id === ROOT_NODE_ID || !canEdit) {
@@ -652,7 +666,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       id,
       parentId: parent.id,
       text: `${levelLabel(getDepth(snapshot.nodes, selectedNode.id))} ${siblings.length + 1}`,
-      x: selectedNode.x,
+      x: rightChildX(parent),
       y: selectedNode.y + selectedNode.style.siblingSpacing,
       color: selectedNode.color,
       branchColor: selectedNode.branchColor,
@@ -671,21 +685,34 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     undoManagerRef.current?.stopCapturing();
     const subtreeIds = [selectedNode.id, ...collectDescendantIds(snapshot.nodes, selectedNode.id)];
     const idMap = new Map(subtreeIds.map((id) => [id, crypto.randomUUID()]));
+    const clonePositions = new Map<string, { x: number; y: number; width: number }>();
     const clones = subtreeIds
       .map((id) => nodesById.get(id))
       .filter((node): node is MindNode => Boolean(node))
-      .map((node) =>
-        newNode({
+      .map((node) => {
+        const externalParent = node.parentId ? nodesById.get(node.parentId) : undefined;
+        const clonedParentPosition = node.parentId ? clonePositions.get(node.parentId) : undefined;
+        const parentX = clonedParentPosition?.x ?? externalParent?.x ?? selectedNode.x;
+        const parentY = clonedParentPosition?.y ?? externalParent?.y ?? selectedNode.y;
+        const parentWidth = clonedParentPosition?.width ?? externalParent?.width ?? selectedNode.width;
+        const x = rightChildX({ x: parentX, width: parentWidth });
+        const y =
+          node.id === selectedNode.id
+            ? selectedNode.y + selectedNode.style.siblingSpacing
+            : parentY + Math.max(-500, Math.min(500, node.y - (externalParent?.y ?? selectedNode.y)));
+        const nextId = idMap.get(node.id) ?? crypto.randomUUID();
+        clonePositions.set(node.id, { x, y, width: node.width });
+        return newNode({
           ...node,
-          id: idMap.get(node.id) ?? crypto.randomUUID(),
+          id: nextId,
           parentId: node.parentId && idMap.has(node.parentId) ? idMap.get(node.parentId) ?? null : node.parentId,
           text: node.id === selectedNode.id ? `${node.text} コピー` : node.text,
-          x: node.x + 46,
-          y: node.y + 46,
+          x,
+          y,
           createdAt: Date.now(),
           updatedAt: Date.now(),
-        }),
-      );
+        });
+      });
 
     transact((doc) => {
       const nodes = getNodesMap(doc);
@@ -717,10 +744,83 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     if (!canEdit) return;
     undoManagerRef.current?.stopCapturing();
     const next = autoLayout(snapshot);
-    transact((doc) => replaceDocument(doc, next, LOCAL_ORIGIN));
+    transact((doc) => {
+      replaceDocument(doc, next, LOCAL_ORIGIN);
+      getMetaMap(doc).set("rightLayoutMigratedAt", Date.now());
+    });
     undoManagerRef.current?.stopCapturing();
-    setToast("自動整列しました");
+    setToast("右向きに整列しました");
   }, [canEdit, snapshot, transact]);
+
+  const applyCollapseChanges = useCallback(
+    (changes: Array<{ id: string; collapsed: boolean }>) => {
+      if (!canEdit || !changes.length) return;
+      undoManagerRef.current?.stopCapturing();
+      transact((doc) => {
+        const nodes = getNodesMap(doc);
+        for (const change of changes) {
+          if (!getChildren(snapshot.nodes, change.id).length) continue;
+          const yNode = nodes.get(change.id);
+          yNode?.set("collapsed", change.collapsed);
+          yNode?.set("updatedAt", Date.now());
+        }
+      });
+      undoManagerRef.current?.stopCapturing();
+    },
+    [canEdit, snapshot.nodes, transact],
+  );
+
+  const expandAll = useCallback(() => {
+    applyCollapseChanges(snapshot.nodes.map((node) => ({ id: node.id, collapsed: false })));
+    setToast("すべて展開しました");
+  }, [applyCollapseChanges, snapshot.nodes]);
+
+  const collapseAll = useCallback(() => {
+    applyCollapseChanges(
+      snapshot.nodes.map((node) => ({
+        id: node.id,
+        collapsed: node.id !== ROOT_NODE_ID,
+      })),
+    );
+    setToast("大項目まで表示しました");
+  }, [applyCollapseChanges, snapshot.nodes]);
+
+  const expandSelectedSubtree = useCallback(() => {
+    if (!selectedNode) return;
+    applyCollapseChanges(
+      [selectedNode.id, ...collectDescendantIds(snapshot.nodes, selectedNode.id)].map((id) => ({
+        id,
+        collapsed: false,
+      })),
+    );
+    setToast("選択中の配下を展開しました");
+  }, [applyCollapseChanges, selectedNode, snapshot.nodes]);
+
+  const collapseSelectedSubtree = useCallback(() => {
+    if (!selectedNode) return;
+    applyCollapseChanges([{ id: selectedNode.id, collapsed: true }]);
+    setToast("選択中の配下を折りたたみました");
+  }, [applyCollapseChanges, selectedNode]);
+
+  const showOneLevel = useCallback(() => {
+    applyCollapseChanges(
+      snapshot.nodes.map((node) => ({
+        id: node.id,
+        collapsed: node.id !== ROOT_NODE_ID,
+      })),
+    );
+    setToast("1階層だけ表示しました");
+  }, [applyCollapseChanges, snapshot.nodes]);
+
+  const expandNextLevel = useCallback(() => {
+    const baseNode = selectedNode ?? nodesById.get(ROOT_NODE_ID);
+    if (!baseNode) return;
+    applyCollapseChanges([
+      { id: baseNode.id, collapsed: false },
+      ...getChildren(snapshot.nodes, baseNode.id).map((node) => ({ id: node.id, collapsed: true })),
+    ]);
+    setToast("次の1階層を展開しました");
+  }, [applyCollapseChanges, nodesById, selectedNode, snapshot.nodes]);
 
   const undo = useCallback(() => {
     const manager = undoManagerRef.current;
@@ -800,11 +900,13 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       event.currentTarget.setPointerCapture(event.pointerId);
       setSelectedNodeId(node.id);
       const subtreeIds = [node.id, ...collectDescendantIds(snapshot.nodes, node.id)];
+      const parent = node.parentId ? nodesById.get(node.parentId) : undefined;
       dragRef.current = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
         moved: false,
+        minDx: parent ? rightChildX(parent) - node.x : Number.NEGATIVE_INFINITY,
         nodes: subtreeIds
           .map((id) => nodesById.get(id))
           .filter((item): item is MindNode => Boolean(item))
@@ -818,7 +920,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     (event: React.PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId || !canEdit) return;
-      const dx = (event.clientX - drag.startX) / transform.scale;
+      const dx = Math.max((event.clientX - drag.startX) / transform.scale, drag.minDx);
       const dy = (event.clientY - drag.startY) / transform.scale;
       if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
       transact((doc) => {
@@ -973,6 +1075,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
         parentId: parent.id,
         parentX: parent.x,
         parentY: parent.y,
+        parentWidth: parent.width,
         sourceName: map.sourceName,
         startIndex: getChildren(snapshot.nodes, parent.id).length,
       });
@@ -1000,9 +1103,12 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const importJson = useCallback(async (file: File) => {
     if (!canEdit) return;
     const text = await file.text();
-    const parsed = normalizeSnapshot(JSON.parse(text) as MindMapSnapshot);
+    const parsed = autoLayout(normalizeSnapshot(JSON.parse(text) as MindMapSnapshot));
     undoManagerRef.current?.stopCapturing();
-    transact((doc) => replaceDocument(doc, parsed, LOCAL_ORIGIN));
+    transact((doc) => {
+      replaceDocument(doc, parsed, LOCAL_ORIGIN);
+      getMetaMap(doc).set("rightLayoutMigratedAt", Date.now());
+    });
     undoManagerRef.current?.stopCapturing();
     setToast("JSONを読み込みました");
   }, [canEdit, transact]);
@@ -1236,7 +1342,10 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
           <div className="tool-group">
             <button
               type="button"
-              onClick={() => selectedNode && updateNodeField(selectedNode.id, "collapsed", !selectedNode.collapsed)}
+              onClick={() =>
+                selectedNode &&
+                applyCollapseChanges([{ id: selectedNode.id, collapsed: !selectedNode.collapsed }])
+              }
               disabled={!canEdit || !selectedNode || !getChildren(snapshot.nodes, selectedNode.id).length}
             >
               {selectedNode?.collapsed ? <ChevronRight size={17} /> : <ChevronDown size={17} />}
@@ -1248,7 +1357,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
             </button>
             <button type="button" onClick={runAutoLayout} disabled={!canEdit}>
               <Sparkles size={17} />
-              自動整列
+              右向きに整列
             </button>
             <button type="button" onClick={() => setIsDocumentImportOpen(true)}>
               <FileText size={17} />
@@ -1281,6 +1390,30 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
                 <button type="button" onClick={exportPdf}>
                   <FileText size={16} />
                   PDF書き出し
+                </button>
+                <button type="button" onClick={expandAll} disabled={!canEdit}>
+                  <ChevronDown size={16} />
+                  すべて展開
+                </button>
+                <button type="button" onClick={collapseAll} disabled={!canEdit}>
+                  <ChevronRight size={16} />
+                  すべて折りたたむ
+                </button>
+                <button type="button" onClick={expandSelectedSubtree} disabled={!canEdit || !selectedNode}>
+                  <ChevronDown size={16} />
+                  選択配下を展開
+                </button>
+                <button type="button" onClick={collapseSelectedSubtree} disabled={!canEdit || !selectedNode}>
+                  <ChevronRight size={16} />
+                  選択配下を折りたたむ
+                </button>
+                <button type="button" onClick={showOneLevel} disabled={!canEdit}>
+                  <ChevronRight size={16} />
+                  1階層だけ表示
+                </button>
+                <button type="button" onClick={expandNextLevel} disabled={!canEdit}>
+                  <ChevronDown size={16} />
+                  次の1階層を展開
                 </button>
               </div>
             ) : null}
@@ -1412,7 +1545,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
                         disabled={!canEdit}
                         onClick={(event) => {
                           event.stopPropagation();
-                          updateNodeField(node.id, "collapsed", !node.collapsed);
+                          applyCollapseChanges([{ id: node.id, collapsed: !node.collapsed }]);
                         }}
                         aria-label={node.collapsed ? "展開" : "折りたたみ"}
                       >
