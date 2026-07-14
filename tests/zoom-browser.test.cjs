@@ -1,25 +1,15 @@
-require("./helpers/register-ts.cjs");
-
 const assert = require("node:assert/strict");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
-const http = require("node:http");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const {
-  calculateViewportBounds,
-  centerNodeOrBoundsInViewport,
-  clampZoom,
-  fitNodesInViewport,
-  viewportTransformCss,
-  zoomTransformAtPoint,
-} = require("../lib/viewport.ts");
 
+const repoRoot = path.resolve(__dirname, "..");
 const chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-test("viewport zoom changes DOM size without drifting the anchor point", async (t) => {
+test("actual Next.js mind map keeps viewport anchors while zooming", { timeout: 90000 }, async (t) => {
   if (!fs.existsSync(chromePath)) {
     t.skip("Google Chrome is not available in this environment");
     return;
@@ -29,8 +19,9 @@ test("viewport zoom changes DOM size without drifting the anchor point", async (
     return;
   }
 
-  const httpServer = await startFixtureServer();
+  const appPort = await freePort();
   const debugPort = await freePort();
+  const app = startNextApp(appPort);
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "mindmap-zoom-chrome-"));
   const chrome = childProcess.spawn(chromePath, [
     "--headless=new",
@@ -48,54 +39,79 @@ test("viewport zoom changes DOM size without drifting the anchor point", async (
 
   t.after(async () => {
     chrome.kill("SIGTERM");
-    await waitForExit(chrome);
-    await new Promise((resolve) => httpServer.close(resolve));
+    app.kill("SIGTERM");
+    await Promise.all([waitForExit(chrome), waitForExit(app)]);
     fs.rmSync(profileDir, { recursive: true, force: true });
   });
 
-  const fixtureUrl = `http://127.0.0.1:${httpServer.address().port}/`;
-  const tab = await openChromeTab(debugPort, fixtureUrl);
+  const pageUrl = `http://127.0.0.1:${appPort}/viewport-test`;
+  await waitForUrl(pageUrl, 60000, () => app.logs());
+
+  const tab = await openChromeTab(debugPort, pageUrl);
   const cdp = await connectCdp(tab.webSocketDebuggerUrl);
   t.after(() => cdp.close());
 
   await cdp.send("Page.enable");
   await cdp.send("Runtime.enable");
-  await cdp.send("Page.navigate", { url: fixtureUrl });
-  await waitFor(() => cdp.evaluate("window.__zoomReady === true"));
+  await cdp.send("Page.navigate", { url: pageUrl });
+  await waitFor(() => cdp.evaluate(`
+    Boolean(
+      document.querySelector('[data-testid="mindmap-canvas"]') &&
+      document.querySelector('[data-testid="mindmap-world"]') &&
+      document.querySelector('[data-testid="mindmap-root-node"]') &&
+      !document.querySelector('.loading-overlay')
+    )
+  `), 30000);
+  await cdp.evaluate(installBrowserHelpersScript());
+  await waitFor(() => cdp.evaluate(`
+    (() => {
+      const state = window.__mindmapZoomTest.read();
+      return state.nodeCount >= 4 &&
+        (state.transform.x !== 0 || state.transform.y !== 0 || state.transform.scale !== 1);
+    })()
+  `), 10000);
 
-  const initial = await cdp.evaluate("window.readZoomState()");
-  await cdp.evaluate("document.querySelector('[data-testid=\"zoom-in\"]').click()");
-  const zoomedIn = await cdp.evaluate("window.readZoomState()");
+  const initial = await cdp.evaluate("window.__mindmapZoomTest.read()");
+  await clickAndWaitForScale(cdp, "zoom-in", (scale) => scale > initial.transform.scale);
+  const zoomedIn = await cdp.evaluate("window.__mindmapZoomTest.read()");
 
   assert.ok(zoomedIn.transform.scale > initial.transform.scale);
   assert.ok(zoomedIn.rootRect.width > initial.rootRect.width);
 
-  await cdp.evaluate("document.querySelector('[data-testid=\"zoom-out\"]').click()");
-  const zoomedBack = await cdp.evaluate("window.readZoomState()");
+  await clickAndWaitForScale(cdp, "zoom-out", (scale) => Math.abs(scale - initial.transform.scale) < 0.001);
+  const zoomedBack = await cdp.evaluate("window.__mindmapZoomTest.read()");
 
   assertAlmostEqual(zoomedBack.transform.scale, initial.transform.scale, 0.001);
-  assertAlmostEqual(zoomedBack.rootRect.width, initial.rootRect.width, 0.01);
+  assertAlmostEqual(zoomedBack.rootRect.width, initial.rootRect.width, 0.5);
 
-  const beforeCenter = await cdp.evaluate("window.worldAtCanvasCenter()");
-  for (let index = 0; index < 5; index += 1) {
-    await cdp.evaluate("document.querySelector('[data-testid=\"zoom-in\"]').click()");
-  }
-  const afterCenter = await cdp.evaluate("window.worldAtCanvasCenter()");
+  const beforeCenter = await cdp.evaluate("window.__mindmapZoomTest.worldAtCanvasCenter()");
+  const beforeScale = zoomedBack.transform.scale;
+  await cdp.evaluate(`
+    (() => {
+      for (let index = 0; index < 5; index += 1) {
+        document.querySelector('[data-testid="zoom-in"]').click();
+      }
+    })()
+  `);
+  await waitFor(() => cdp.evaluate(`window.__mindmapZoomTest.read().transform.scale > ${beforeScale + 0.45}`));
+  const afterCenter = await cdp.evaluate("window.__mindmapZoomTest.worldAtCanvasCenter()");
   assertAlmostEqual(afterCenter.x, beforeCenter.x, 0.01);
   assertAlmostEqual(afterCenter.y, beforeCenter.y, 0.01);
 
-  await cdp.evaluate("document.querySelector('[data-testid=\"zoom-reset\"]').click()");
-  const reset = await cdp.evaluate("window.readZoomState()");
+  await clickAndWaitForScale(cdp, "zoom-reset", (scale) => Math.abs(scale - 1) < 0.001);
+  const reset = await cdp.evaluate("window.__mindmapZoomTest.read()");
   assertAlmostEqual(reset.transform.scale, 1, 0.001);
-  assertAlmostEqual(reset.rootCenter.x, reset.canvasCenter.x, 0.5);
-  assertAlmostEqual(reset.rootCenter.y, reset.canvasCenter.y, 0.5);
+  assertAlmostEqual(reset.rootCenter.x, reset.canvasCenter.x, 1);
+  assertAlmostEqual(reset.rootCenter.y, reset.canvasCenter.y, 1);
 
   await cdp.evaluate("document.querySelector('[data-testid=\"zoom-fit\"]').click()");
-  const fitted = await cdp.evaluate("window.readZoomState()");
+  await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.read().allNodesInsideCanvas"), 10000);
+  const fitted = await cdp.evaluate("window.__mindmapZoomTest.read()");
   assert.equal(fitted.allNodesInsideCanvas, true);
   assert.ok(fitted.transform.scale <= 1);
 
-  const beforeWheel = await cdp.evaluate("window.worldAtLocalPoint(320, 210)");
+  const beforeWheelState = await cdp.evaluate("window.__mindmapZoomTest.read()");
+  const beforeWheel = await cdp.evaluate("window.__mindmapZoomTest.worldAtLocalPoint(320, 210)");
   await cdp.evaluate(`
     (() => {
       const canvas = document.querySelector('[data-testid="mindmap-canvas"]');
@@ -109,163 +125,127 @@ test("viewport zoom changes DOM size without drifting the anchor point", async (
       }));
     })()
   `);
-  const afterWheel = await cdp.evaluate("window.worldAtLocalPoint(320, 210)");
+  await waitFor(() => cdp.evaluate(`window.__mindmapZoomTest.read().transform.scale > ${beforeWheelState.transform.scale}`));
+  const afterWheel = await cdp.evaluate("window.__mindmapZoomTest.worldAtLocalPoint(320, 210)");
   assertAlmostEqual(afterWheel.x, beforeWheel.x, 0.01);
   assertAlmostEqual(afterWheel.y, beforeWheel.y, 0.01);
 });
 
-function fixtureHtml() {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body { margin: 0; }
-    .canvas {
-      position: relative;
-      width: 800px;
-      height: 500px;
-      overflow: hidden;
-      touch-action: none;
-      overscroll-behavior: none;
-    }
-    .world {
-      position: absolute;
-      inset: 0;
-      width: 1600px;
-      height: 900px;
-      transform-origin: 0 0;
-      transition: none;
-    }
-    .mind-node {
-      position: absolute;
-      box-sizing: border-box;
-      border: 2px solid #2563eb;
-      border-radius: 8px;
-      background: #fff;
-    }
-    .zoom-controls {
-      position: absolute;
-      right: 12px;
-      bottom: 12px;
-    }
-  </style>
-</head>
-<body>
-  <div class="canvas" data-testid="mindmap-canvas">
-    <div class="world" data-testid="mindmap-world">
-      <div class="mind-node" data-testid="mindmap-root-node" style="left:300px;top:220px;width:200px;height:80px"></div>
-      <div class="mind-node" data-testid="mindmap-node" style="left:980px;top:420px;width:180px;height:70px"></div>
-    </div>
-    <div class="zoom-controls">
-      <button data-testid="zoom-out">-</button>
-      <button data-testid="zoom-reset">100%</button>
-      <button data-testid="zoom-in">+</button>
-      <button data-testid="zoom-fit">全体</button>
-    </div>
-  </div>
-  <script>
-    const MIN_ZOOM = 0.25;
-    const MAX_ZOOM = 2.5;
-    const ZOOM_STEP = 0.1;
-    const exports = { MIN_ZOOM, MAX_ZOOM };
-    ${clampZoom.toString()}
-    ${calculateViewportBounds.toString()}
-    ${zoomTransformAtPoint.toString()}
-    ${centerNodeOrBoundsInViewport.toString()}
-    ${fitNodesInViewport.toString()}
-    ${viewportTransformCss.toString()}
-
-    const canvas = document.querySelector('[data-testid="mindmap-canvas"]');
-    const world = document.querySelector('[data-testid="mindmap-world"]');
-    const nodes = [
-      { id: "root", x: 300, y: 220, width: 200, height: 80 },
-      { id: "child", x: 980, y: 420, width: 180, height: 70 }
-    ];
-    let transform = centerNodeOrBoundsInViewport(nodes[0], nodes, canvas.getBoundingClientRect(), 1);
-
-    function applyTransform() {
-      world.style.transform = viewportTransformCss(transform);
-    }
-    function setTransform(next) {
-      transform = next;
-      applyTransform();
-    }
-    function localCenter() {
-      const rect = canvas.getBoundingClientRect();
-      return { x: rect.width / 2, y: rect.height / 2 };
-    }
-    function rectValue(rect) {
-      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
-    }
-
-    document.querySelector('[data-testid="zoom-in"]').addEventListener("click", () => {
-      setTransform(zoomTransformAtPoint(transform, transform.scale + ZOOM_STEP, localCenter()));
-    });
-    document.querySelector('[data-testid="zoom-out"]').addEventListener("click", () => {
-      setTransform(zoomTransformAtPoint(transform, transform.scale - ZOOM_STEP, localCenter()));
-    });
-    document.querySelector('[data-testid="zoom-reset"]').addEventListener("click", () => {
-      setTransform(centerNodeOrBoundsInViewport(nodes[0], nodes, canvas.getBoundingClientRect(), 1));
-    });
-    document.querySelector('[data-testid="zoom-fit"]').addEventListener("click", () => {
-      setTransform(fitNodesInViewport(nodes, canvas.getBoundingClientRect(), { maxScale: 1 }).transform);
-    });
-    canvas.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
-      const rect = canvas.getBoundingClientRect();
-      const localX = event.clientX - rect.left;
-      const localY = event.clientY - rect.top;
-      const clampedDelta = Math.max(-100, Math.min(100, event.deltaY));
-      setTransform(zoomTransformAtPoint(transform, transform.scale * Math.exp(-clampedDelta * 0.0015), { x: localX, y: localY }));
-    });
-
-    window.worldAtLocalPoint = (localX, localY) => ({
-      x: (localX - transform.x) / transform.scale,
-      y: (localY - transform.y) / transform.scale
-    });
-    window.worldAtCanvasCenter = () => {
-      const center = localCenter();
-      return window.worldAtLocalPoint(center.x, center.y);
-    };
-    window.readZoomState = () => {
-      const canvasRect = canvas.getBoundingClientRect();
-      const rootRect = document.querySelector('[data-testid="mindmap-root-node"]').getBoundingClientRect();
-      const nodeRects = Array.from(document.querySelectorAll('.mind-node')).map((node) => rectValue(node.getBoundingClientRect()));
-      const rootCenter = { x: rootRect.left + rootRect.width / 2, y: rootRect.top + rootRect.height / 2 };
-      const canvasCenter = { x: canvasRect.left + canvasRect.width / 2, y: canvasRect.top + canvasRect.height / 2 };
-      return {
-        transform,
-        canvasRect: rectValue(canvasRect),
-        rootRect: rectValue(rootRect),
-        rootCenter,
-        canvasCenter,
-        allNodesInsideCanvas: nodeRects.every((rect) =>
-          rect.left >= canvasRect.left - 0.5 &&
-          rect.top >= canvasRect.top - 0.5 &&
-          rect.right <= canvasRect.right + 0.5 &&
-          rect.bottom <= canvasRect.bottom + 0.5
-        )
-      };
-    };
-
-    applyTransform();
-    window.__zoomReady = true;
-  </script>
-</body>
-</html>`;
+function startNextApp(port) {
+  const nextCli = path.join(repoRoot, "node_modules", "next", "dist", "bin", "next");
+  const output = [];
+  const child = childProcess.spawn(process.execPath, [
+    nextCli,
+    "dev",
+    "--hostname",
+    "127.0.0.1",
+    "--port",
+    String(port),
+  ], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      NEXT_TELEMETRY_DISABLED: "1",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.on("data", (chunk) => output.push(chunk.toString()));
+  child.stderr.on("data", (chunk) => output.push(chunk.toString()));
+  child.logs = () => output.join("");
+  return child;
 }
 
-function startFixtureServer() {
-  const html = fixtureHtml();
-  const server = http.createServer((request, response) => {
-    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    response.end(html);
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve(server));
-  });
+function installBrowserHelpersScript() {
+  return `
+    (() => {
+      const transformPattern = /translate3d\\(([-+]?\\d*\\.?\\d+(?:e[-+]?\\d+)?)px, ([-+]?\\d*\\.?\\d+(?:e[-+]?\\d+)?)px, 0(?:px)?\\) scale\\(([-+]?\\d*\\.?\\d+(?:e[-+]?\\d+)?)\\)/i;
+
+      function element(testId) {
+        const found = document.querySelector('[data-testid="' + testId + '"]');
+        if (!found) throw new Error('Missing element: ' + testId);
+        return found;
+      }
+
+      function rectValue(rect) {
+        return {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height
+        };
+      }
+
+      function parseTransform() {
+        const value = element('mindmap-world').style.transform;
+        const match = value.match(transformPattern);
+        if (!match) throw new Error('Unexpected transform: ' + value);
+        return {
+          x: Number(match[1]),
+          y: Number(match[2]),
+          scale: Number(match[3])
+        };
+      }
+
+      function worldAtLocalPoint(localX, localY) {
+        const transform = parseTransform();
+        return {
+          x: (localX - transform.x) / transform.scale,
+          y: (localY - transform.y) / transform.scale
+        };
+      }
+
+      function read() {
+        const canvas = element('mindmap-canvas');
+        const canvasRect = canvas.getBoundingClientRect();
+        const rootRect = element('mindmap-root-node').getBoundingClientRect();
+        const nodeRects = Array.from(document.querySelectorAll('[data-testid="mindmap-root-node"], [data-testid="mindmap-node"]'))
+          .map((node) => rectValue(node.getBoundingClientRect()));
+        const transform = parseTransform();
+        const rootCenter = {
+          x: rootRect.left + rootRect.width / 2,
+          y: rootRect.top + rootRect.height / 2
+        };
+        const canvasCenter = {
+          x: canvasRect.left + canvasRect.width / 2,
+          y: canvasRect.top + canvasRect.height / 2
+        };
+        return {
+          transform,
+          nodeCount: nodeRects.length,
+          canvasRect: rectValue(canvasRect),
+          rootRect: rectValue(rootRect),
+          rootCenter,
+          canvasCenter,
+          allNodesInsideCanvas: nodeRects.every((rect) =>
+            rect.left >= canvasRect.left - 1 &&
+            rect.top >= canvasRect.top - 1 &&
+            rect.right <= canvasRect.right + 1 &&
+            rect.bottom <= canvasRect.bottom + 1
+          )
+        };
+      }
+
+      window.__mindmapZoomTest = {
+        parseTransform,
+        read,
+        worldAtLocalPoint,
+        worldAtCanvasCenter() {
+          const canvasRect = element('mindmap-canvas').getBoundingClientRect();
+          return worldAtLocalPoint(canvasRect.width / 2, canvasRect.height / 2);
+        }
+      };
+    })()
+  `;
+}
+
+async function clickAndWaitForScale(cdp, testId, predicate) {
+  await cdp.evaluate(`document.querySelector('[data-testid="${testId}"]').click()`);
+  await waitFor(async () => {
+    const state = await cdp.evaluate("window.__mindmapZoomTest.read()");
+    return predicate(state.transform.scale);
+  }, 10000);
 }
 
 function freePort() {
@@ -276,6 +256,16 @@ function freePort() {
       const { port } = server.address();
       server.close(() => resolve(port));
     });
+  });
+}
+
+async function waitForUrl(url, timeoutMs, logs) {
+  await waitFor(async () => {
+    const response = await fetch(url).catch(() => null);
+    return Boolean(response?.ok);
+  }, timeoutMs, () => {
+    const detail = logs?.();
+    return detail ? `\nNext.js output:\n${detail}` : "";
   });
 }
 
@@ -330,7 +320,12 @@ function connectCdp(webSocketDebuggerUrl) {
         returnByValue: true,
       });
       if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.text || "Browser evaluation failed");
+        throw new Error(
+          result.exceptionDetails.exception?.description ||
+            result.exceptionDetails.exception?.value ||
+            result.exceptionDetails.text ||
+            "Browser evaluation failed",
+        );
       }
       return result.result.value;
     },
@@ -340,13 +335,13 @@ function connectCdp(webSocketDebuggerUrl) {
   }));
 }
 
-async function waitFor(callback, timeoutMs = 8000) {
+async function waitFor(callback, timeoutMs = 8000, message = () => "") {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await callback()) return;
     await new Promise((resolve) => setTimeout(resolve, 80));
   }
-  throw new Error("Timed out waiting for browser condition");
+  throw new Error(`Timed out waiting for browser condition${message()}`);
 }
 
 function assertAlmostEqual(actual, expected, tolerance) {

@@ -138,6 +138,7 @@ type MindMapAppProps = {
   roomId: string;
   token: string;
   initialMode: AccessMode;
+  testSnapshot?: MindMapSnapshot;
 };
 
 type DragState = {
@@ -179,18 +180,19 @@ const initialSnapshot: MindMapSnapshot = {
 const DEFAULT_BRANCH_COLOR = "#38bdf8";
 const RECENT_BRANCH_COLORS_KEY = "mindmap:recent-branch-colors";
 
-export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
+export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMapAppProps) {
+  const isTestMode = Boolean(testSnapshot);
   const [userName, setUserNameState] = useState("ゲスト");
   const [mode, setMode] = useState<AccessMode>(initialMode);
-  const [snapshot, setSnapshot] = useState<MindMapSnapshot>(initialSnapshot);
+  const [snapshot, setSnapshot] = useState<MindMapSnapshot>(() => testSnapshot ?? initialSnapshot);
   const [selectedNodeId, setSelectedNodeId] = useState(ROOT_NODE_ID);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("initial");
-  const [isSynced, setIsSynced] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>(testSnapshot ? "connected" : "initial");
+  const [isSynced, setIsSynced] = useState(Boolean(testSnapshot));
   const [shareLinks, setShareLinks] = useState<ShareLinks | null>(null);
   const [message, setMessage] = useState("");
-  const [shareReady, setShareReady] = useState(false);
+  const [shareReady, setShareReady] = useState(Boolean(testSnapshot));
   const [transform, setTransform] = useState<ViewportTransform>({ x: 0, y: 0, scale: 1 });
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([ROOT_NODE_ID]);
@@ -268,9 +270,9 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     setUserNameState(initialName);
     userNameRef.current = initialName;
     setAdminTokenValue(getAdminToken());
-    setShowGuide(window.localStorage.getItem("mindmap:guide-seen") !== "yes");
+    setShowGuide(!isTestMode && window.localStorage.getItem("mindmap:guide-seen") !== "yes");
     setRecentBranchColors(readRecentBranchColors());
-  }, []);
+  }, [isTestMode]);
 
   useEffect(() => {
     userNameRef.current = userName;
@@ -291,6 +293,14 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   }, []);
 
   useEffect(() => {
+    if (isTestMode) {
+      setShareReady(true);
+      setIsSynced(true);
+      setConnectionStatus("connected");
+      setMessage("");
+      return;
+    }
+
     if (!token) {
       setMessage("共有リンクに必要なトークンがありません。ホームから新しいマップを作成してください。");
       setShareReady(false);
@@ -329,7 +339,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     return () => {
       mounted = false;
     };
-  }, [roomId, token]);
+  }, [isTestMode, roomId, token]);
 
   const refreshUndoAvailability = useCallback(() => {
     const manager = undoManagerRef.current as
@@ -355,6 +365,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   }, []);
 
   useEffect(() => {
+    if (isTestMode) return;
     if (!token || !shareReady) return;
 
     const entered = liveblocksClient.enterRoom(roomId, {
@@ -487,7 +498,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
       roomRef.current = null;
       entered.leave();
     };
-  }, [liveblocksClient, refreshUndoAvailability, roomId, shareReady, token]);
+  }, [isTestMode, liveblocksClient, refreshUndoAvailability, roomId, shareReady, token]);
 
   useEffect(() => {
     roomRef.current?.updatePresence({ selectedNodeId, editingNodeId });
@@ -527,21 +538,48 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
     setSelectedNodeIds((current) => current.filter((id) => ids.has(id)));
   }, [selectNode, selectedNodeId, snapshot.nodes]);
 
+  const visibleNodesForViewport = useCallback(() => {
+    const world = worldRef.current;
+    if (!world || transform.scale <= 0) return visibleNodes;
+
+    const elements = new Map(
+      Array.from(world.querySelectorAll<HTMLElement>("[data-node-id]")).map((element) => [
+        element.dataset.nodeId,
+        element,
+      ]),
+    );
+
+    return visibleNodes.map((node) => {
+      const element = elements.get(node.id);
+      if (!element) return node;
+      const rect = element.getBoundingClientRect();
+      const width = rect.width / transform.scale;
+      const height = rect.height / transform.scale;
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return node;
+      return {
+        ...node,
+        width: Math.max(node.width, Math.ceil(width)),
+        height: Math.max(node.height, Math.ceil(height)),
+      };
+    });
+  }, [transform.scale, visibleNodes]);
+
   useEffect(() => {
     if (!isSynced || didInitializeViewportRef.current || !visibleNodes.length) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) return;
 
-    const root = nodesById.get(ROOT_NODE_ID);
-    const fit = fitNodesInViewport(visibleNodes, rect, { maxScale: 1 });
+    const viewportNodes = visibleNodesForViewport();
+    const root = viewportNodes.find((node) => node.id === ROOT_NODE_ID) ?? nodesById.get(ROOT_NODE_ID);
+    const fit = fitNodesInViewport(viewportNodes, rect, { maxScale: 1 });
     if (fit.idealScale >= MIN_ZOOM) {
       setTransform(fit.transform);
     } else {
-      setTransform(centerNodeOrBoundsInViewport(root, visibleNodes, rect, MIN_ZOOM));
+      setTransform(centerNodeOrBoundsInViewport(root, viewportNodes, rect, MIN_ZOOM));
     }
     canvasSizeRef.current = { width: rect.width, height: rect.height };
     didInitializeViewportRef.current = true;
-  }, [isSynced, nodesById, visibleNodes]);
+  }, [isSynced, nodesById, visibleNodes, visibleNodesForViewport]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1034,15 +1072,16 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
   const resetZoom = useCallback(() => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const root = nodesById.get(ROOT_NODE_ID);
-    setTransform(centerNodeOrBoundsInViewport(root, visibleNodes, rect, 1));
-  }, [nodesById, visibleNodes]);
+    const viewportNodes = visibleNodesForViewport();
+    const root = viewportNodes.find((node) => node.id === ROOT_NODE_ID) ?? nodesById.get(ROOT_NODE_ID);
+    setTransform(centerNodeOrBoundsInViewport(root, viewportNodes, rect, 1));
+  }, [nodesById, visibleNodesForViewport]);
 
   const fitVisibleNodes = useCallback(() => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect || !visibleNodes.length) return;
-    setTransform(fitNodesInViewport(visibleNodes, rect, { maxScale: 1 }).transform);
-  }, [visibleNodes]);
+    setTransform(fitNodesInViewport(visibleNodesForViewport(), rect, { maxScale: 1 }).transform);
+  }, [visibleNodes.length, visibleNodesForViewport]);
 
   const canvasToWorld = useCallback(
     (clientX: number, clientY: number) => {
@@ -1726,6 +1765,7 @@ export function MindMapApp({ roomId, token, initialMode }: MindMapAppProps) {
                     remoteEditors.length ? "remote-editing" : remoteSelectors.length ? "remote-selected" : ""
                   }`}
                   data-testid={node.id === ROOT_NODE_ID ? "mindmap-root-node" : "mindmap-node"}
+                  data-node-id={node.id}
                   key={node.id}
                   style={
                     {

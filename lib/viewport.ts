@@ -1,4 +1,5 @@
 import type { MindNode } from "@/types/mindmap";
+import { normalizeStyle } from "@/lib/stylePresets";
 
 export type ViewportTransform = {
   x: number;
@@ -47,8 +48,9 @@ export function centerNodeOrBoundsInViewport(
 ): ViewportTransform {
   const nextScale = clampZoom(scale);
   const bounds = calculateViewportBounds(visibleNodes);
-  const centerX = node ? node.x + node.width / 2 : bounds.minX + bounds.width / 2;
-  const centerY = node ? node.y + node.height / 2 : bounds.minY + bounds.height / 2;
+  const size = node ? viewportNodeSize(node) : null;
+  const centerX = node && size ? node.x + size.width / 2 : bounds.minX + bounds.width / 2;
+  const centerY = node && size ? node.y + size.height / 2 : bounds.minY + bounds.height / 2;
   return {
     scale: nextScale,
     x: rect.width / 2 - centerX * nextScale,
@@ -79,8 +81,8 @@ export function calculateViewportBounds(nodes: MindNode[], padding = 80) {
   if (!nodes.length) return { minX: 0, minY: 0, width: 1, height: 1 };
   const minX = Math.min(...nodes.map((node) => node.x)) - padding;
   const minY = Math.min(...nodes.map((node) => node.y)) - padding;
-  const maxX = Math.max(...nodes.map((node) => node.x + node.width)) + padding;
-  const maxY = Math.max(...nodes.map((node) => node.y + node.height)) + padding;
+  const maxX = Math.max(...nodes.map((node) => node.x + viewportNodeSize(node).width)) + padding;
+  const maxY = Math.max(...nodes.map((node) => node.y + viewportNodeSize(node).height)) + padding;
   return {
     minX,
     minY,
@@ -100,4 +102,12 @@ export function calculateExportBounds(nodes: MindNode[]) {
 
 export function viewportTransformCss(transform: ViewportTransform) {
   return `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`;
+}
+
+function viewportNodeSize(node: MindNode) {
+  const style = normalizeStyle(node.style, node.color);
+  return {
+    width: Math.max(1, node.width, style.minWidth),
+    height: Math.max(1, node.height, style.minHeight),
+  };
 }
