@@ -458,6 +458,10 @@ a {
   grid-template-columns: 260px minmax(0, 1fr) 0;
 }
 
+.mindmap-shell.left-collapsed.style-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
+}
+
 .left-rail,
 .style-panel {
   min-width: 0;

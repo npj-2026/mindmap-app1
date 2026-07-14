@@ -223,6 +223,7 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
   const nodeElementRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const textareaElementRefs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
   const sizeMeasureFramesRef = useRef<Map<string, number>>(new Map());
+  const panelFitFramesRef = useRef<number[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const panRef = useRef<PanState | null>(null);
@@ -345,6 +346,10 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
         window.cancelAnimationFrame(frame);
       }
       sizeMeasureFramesRef.current.clear();
+      for (const frame of panelFitFramesRef.current) {
+        window.cancelAnimationFrame(frame);
+      }
+      panelFitFramesRef.current = [];
     };
   }, []);
 
@@ -1182,6 +1187,46 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
     setTransform(fitNodesInViewport(visibleNodesForViewport(), rect, { maxScale: 1 }).transform);
   }, [visibleNodes.length, visibleNodesForViewport]);
 
+  const areVisibleNodesInsideCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    const world = worldRef.current;
+    if (!canvas || !world) return true;
+    const canvasRect = canvas.getBoundingClientRect();
+    const nodeRects = Array.from(world.querySelectorAll<HTMLElement>("[data-node-id]"))
+      .map((element) => element.getBoundingClientRect())
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    if (!nodeRects.length) return true;
+    return nodeRects.every(
+      (rect) =>
+        rect.left >= canvasRect.left &&
+        rect.top >= canvasRect.top &&
+        rect.right <= canvasRect.right &&
+        rect.bottom <= canvasRect.bottom,
+    );
+  }, []);
+
+  const schedulePanelViewportFit = useCallback(
+    (force: boolean) => {
+      if (typeof window === "undefined") return;
+      for (const frame of panelFitFramesRef.current) {
+        window.cancelAnimationFrame(frame);
+      }
+      panelFitFramesRef.current = [];
+
+      const firstFrame = window.requestAnimationFrame(() => {
+        const secondFrame = window.requestAnimationFrame(() => {
+          panelFitFramesRef.current = [];
+          if (force || !areVisibleNodesInsideCanvas()) {
+            fitVisibleNodes();
+          }
+        });
+        panelFitFramesRef.current = [secondFrame];
+      });
+      panelFitFramesRef.current = [firstFrame];
+    },
+    [areVisibleNodesInsideCanvas, fitVisibleNodes],
+  );
+
   const canvasToWorld = useCallback(
     (clientX: number, clientY: number) => {
       const rect = canvasRef.current?.getBoundingClientRect();
@@ -1586,7 +1631,14 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
           <ArrowLeft size={18} />
           ホーム
         </a>
-        <button className="rail-collapse" type="button" onClick={() => setIsLeftOpen(false)}>
+        <button
+          className="rail-collapse"
+          type="button"
+          onClick={() => {
+            setIsLeftOpen(false);
+            schedulePanelViewportFit(true);
+          }}
+        >
           <PanelLeftClose size={16} />
           パネルを閉じる
         </button>
@@ -1654,7 +1706,15 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
       <section className="workspace">
         <header className="appbar">
           {!isLeftOpen ? (
-            <button className="panel-toggle" type="button" onClick={() => setIsLeftOpen(true)} aria-label="左パネルを開く">
+            <button
+              className="panel-toggle"
+              type="button"
+              onClick={() => {
+                setIsLeftOpen(true);
+                schedulePanelViewportFit(false);
+              }}
+              aria-label="左パネルを開く"
+            >
               <PanelLeftOpen size={18} />
             </button>
           ) : null}
@@ -1747,7 +1807,14 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
               {selectedNode?.collapsed ? <ChevronRight size={17} /> : <ChevronDown size={17} />}
               折りたたみ
             </button>
-            <button type="button" onClick={() => setIsStyleOpen(true)} disabled={!selectedNode}>
+            <button
+              type="button"
+              onClick={() => {
+                setIsStyleOpen(true);
+                schedulePanelViewportFit(false);
+              }}
+              disabled={!selectedNode}
+            >
               <Palette size={17} />
               スタイル
             </button>
@@ -1933,6 +2000,7 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
                     event.preventDefault();
                     selectNode(node.id);
                     setIsStyleOpen(true);
+                    schedulePanelViewportFit(false);
                     setToast("右側でノードを編集できます");
                   }}
                 >
@@ -2098,10 +2166,21 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
           onPasteStyle={pasteStyle}
           onApplyScope={applyStyleScope}
           recentBranchColors={recentBranchColors}
-          onClose={() => setIsStyleOpen(false)}
+          onClose={() => {
+            setIsStyleOpen(false);
+            schedulePanelViewportFit(true);
+          }}
         />
       ) : (
-        <button className="style-open-button" type="button" onClick={() => setIsStyleOpen(true)} aria-label="スタイルパネルを開く">
+        <button
+          className="style-open-button"
+          type="button"
+          onClick={() => {
+            setIsStyleOpen(true);
+            schedulePanelViewportFit(false);
+          }}
+          aria-label="スタイルパネルを開く"
+        >
           <PanelRightOpen size={18} />
           スタイル
         </button>
