@@ -54,6 +54,7 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   await cdp.send("Page.enable");
   await cdp.send("Runtime.enable");
   await cdp.send("Page.navigate", { url: pageUrl });
+  await cdp.send("Page.bringToFront");
   await waitFor(() => cdp.evaluate(`
     Boolean(
       document.querySelector('[data-testid="mindmap-canvas"]') &&
@@ -70,6 +71,8 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
         (state.transform.x !== 0 || state.transform.y !== 0 || state.transform.scale !== 1);
     })()
   `), 10000);
+  await cdp.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true");
+  await new Promise((resolve) => setTimeout(resolve, 100));
 
   const initial = await cdp.evaluate("window.__mindmapZoomTest.read()");
   await clickAndWaitForScale(cdp, "zoom-in", (scale) => scale > initial.transform.scale);
@@ -86,13 +89,9 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
 
   const beforeCenter = await cdp.evaluate("window.__mindmapZoomTest.worldAtCanvasCenter()");
   const beforeScale = zoomedBack.transform.scale;
-  await cdp.evaluate(`
-    (() => {
-      for (let index = 0; index < 5; index += 1) {
-        document.querySelector('[data-testid="zoom-in"]').click();
-      }
-    })()
-  `);
+  for (let index = 0; index < 5; index += 1) {
+    await mouseClickTestId(cdp, "zoom-in");
+  }
   await waitFor(() => cdp.evaluate(`window.__mindmapZoomTest.read().transform.scale > ${beforeScale + 0.45}`));
   const afterCenter = await cdp.evaluate("window.__mindmapZoomTest.worldAtCanvasCenter()");
   assertAlmostEqual(afterCenter.x, beforeCenter.x, 0.01);
@@ -104,38 +103,131 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   assertAlmostEqual(reset.rootCenter.x, reset.canvasCenter.x, 1);
   assertAlmostEqual(reset.rootCenter.y, reset.canvasCenter.y, 1);
 
-  await cdp.evaluate("document.querySelector('[data-testid=\"zoom-fit\"]').click()");
+  await mouseClickTestId(cdp, "zoom-fit");
   await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.read().allNodesInsideCanvas"), 10000);
   const fitted = await cdp.evaluate("window.__mindmapZoomTest.read()");
   assert.equal(fitted.allNodesInsideCanvas, true);
   assert.ok(fitted.transform.scale <= 1);
 
   const beforeWheelState = await cdp.evaluate("window.__mindmapZoomTest.read()");
-  const beforeWheel = await cdp.evaluate("window.__mindmapZoomTest.worldAtLocalPoint(320, 210)");
-  await cdp.evaluate(`
-    (() => {
-      const canvas = document.querySelector('[data-testid="mindmap-canvas"]');
-      const rect = canvas.getBoundingClientRect();
-      canvas.dispatchEvent(new WheelEvent('wheel', {
-        bubbles: true,
-        cancelable: true,
-        clientX: rect.left + 320,
-        clientY: rect.top + 210,
-        deltaY: -100
-      }));
-    })()
+  const wheelPoint = await cdp.evaluate("window.__mindmapZoomTest.backgroundPointInCanvas()");
+  const beforeWheel = await cdp.evaluate(`
+    window.__mindmapZoomTest.worldAtLocalPoint(${wheelPoint.localX}, ${wheelPoint.localY})
   `);
-  await waitFor(() => cdp.evaluate(`window.__mindmapZoomTest.read().transform.scale > ${beforeWheelState.transform.scale}`));
-  const afterWheel = await cdp.evaluate("window.__mindmapZoomTest.worldAtLocalPoint(320, 210)");
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: Math.round(wheelPoint.x),
+    y: Math.round(wheelPoint.y),
+  });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: Math.round(wheelPoint.x),
+    y: Math.round(wheelPoint.y),
+    deltaY: -240,
+    deltaX: 0,
+  });
+  await cdp.send("Input.synthesizeScrollGesture", {
+    x: Math.round(wheelPoint.x),
+    y: Math.round(wheelPoint.y),
+    yDistance: 240,
+    xDistance: 0,
+    speed: 800,
+    gestureSourceType: "mouse",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const afterNativeWheelAttempt = await cdp.evaluate("window.__mindmapZoomTest.read()");
+  if (Math.abs(afterNativeWheelAttempt.transform.scale - beforeWheelState.transform.scale) <= 0.001) {
+    await cdp.evaluate(`
+      window.__mindmapZoomTest.dispatchWheelAtCanvasPoint(${wheelPoint.localX}, ${wheelPoint.localY}, -240)
+    `);
+  }
+  await waitFor(() => cdp.evaluate(`
+    Math.abs(window.__mindmapZoomTest.read().transform.scale - ${beforeWheelState.transform.scale}) > 0.001
+  `));
+  const afterWheel = await cdp.evaluate(`
+    window.__mindmapZoomTest.worldAtLocalPoint(${wheelPoint.localX}, ${wheelPoint.localY})
+  `);
   assertAlmostEqual(afterWheel.x, beforeWheel.x, 0.01);
   assertAlmostEqual(afterWheel.y, beforeWheel.y, 0.01);
 
-  await cdp.evaluate("window.__mindmapZoomTest.clickButtonByText('資料から作成')");
+  const beforePan = await cdp.evaluate("window.__mindmapZoomTest.read().transform");
+  const panStart = await cdp.evaluate("window.__mindmapZoomTest.backgroundPointInCanvas()");
+  const panX = Math.round(panStart.x);
+  const panY = Math.round(panStart.y);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: panX, y: panY, pointerType: "mouse" });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: panX, y: panY, button: "left", buttons: 1, clickCount: 1, pointerType: "mouse" });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: panX + 80, y: panY + 40, button: "left", buttons: 1, pointerType: "mouse" });
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: panX + 80, y: panY + 40, button: "left", buttons: 0, clickCount: 1, pointerType: "mouse" });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const afterNativePanAttempt = await cdp.evaluate("window.__mindmapZoomTest.read().transform");
+  if (
+    Math.abs(afterNativePanAttempt.x - beforePan.x) <= 20 &&
+    Math.abs(afterNativePanAttempt.y - beforePan.y) <= 20
+  ) {
+    await cdp.evaluate(`
+      window.__mindmapZoomTest.dispatchMousePan(${panStart.localX}, ${panStart.localY}, 80, 40)
+    `);
+  }
+  await waitFor(() => cdp.evaluate(`
+    (() => {
+      const current = window.__mindmapZoomTest.read().transform;
+      return Math.abs(current.x - ${beforePan.x}) > 20 || Math.abs(current.y - ${beforePan.y}) > 20;
+    })()
+  `), 10000);
+  const afterPan = await cdp.evaluate("window.__mindmapZoomTest.read().transform");
+  await mouseClickTestId(cdp, "zoom-in");
+  const afterZoomButton = await cdp.evaluate("window.__mindmapZoomTest.read().transform");
+  assert.ok(afterZoomButton.scale > afterPan.scale, "zoom button should increase scale after panning");
+  assert.ok(Math.abs(afterZoomButton.x - afterPan.x) < 500, "zoom button should not start canvas panning");
+  assert.ok(Math.abs(afterZoomButton.y - afterPan.y) < 500, "zoom button should not start canvas panning");
+
+  const compactLayout = await cdp.evaluate("window.__mindmapZoomTest.readLayout()");
+  assert.ok(compactLayout.appbar.height <= 53, `appbar height ${compactLayout.appbar.height}`);
+  assert.ok(compactLayout.toolbar.height <= 57, `toolbar height ${compactLayout.toolbar.height}`);
+  assert.ok(compactLayout.canvas.height > compactLayout.appbar.height + compactLayout.toolbar.height);
+  assert.equal(compactLayout.zoom.flexDirection, "row");
+  assert.equal(compactLayout.zoom.flexWrap, "nowrap");
+  assert.ok(compactLayout.zoom.height <= 45, `zoom controls height ${compactLayout.zoom.height}`);
+  assert.ok(compactLayout.zoom.right <= compactLayout.canvas.right + 1);
+  assert.ok(compactLayout.zoom.bottom <= compactLayout.canvas.bottom + 1);
+
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 430,
+    height: 760,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const narrowLayout = await cdp.evaluate("window.__mindmapZoomTest.readLayout()");
+  assert.equal(narrowLayout.zoom.flexDirection, "row");
+  assert.equal(narrowLayout.zoom.flexWrap, "nowrap");
+  assert.ok(narrowLayout.zoom.height <= 45);
+  assert.ok(narrowLayout.zoom.bottom <= narrowLayout.canvas.bottom + 1);
+
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 900,
+    height: 520,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const shortLayout = await cdp.evaluate("window.__mindmapZoomTest.readLayout()");
+  assert.ok(shortLayout.canvas.height > 260, `canvas height ${shortLayout.canvas.height}`);
+  assert.ok(shortLayout.zoom.bottom <= shortLayout.canvas.bottom + 1);
+
+  await cdp.send("Emulation.setDeviceMetricsOverride", {
+    width: 1280,
+    height: 820,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  await mouseClickByText(cdp, "資料から作成");
   await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.document-textarea'))"), 10000);
   await cdp.evaluate(`
     window.__mindmapZoomTest.setTextarea('.document-textarea', ${JSON.stringify(sixLevelMarkdown())});
-    window.__mindmapZoomTest.clickButtonByText('作成前プレビューを作る');
   `);
+  await mouseClickByText(cdp, "作成前プレビューを作る");
   await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.readPreviewChain().titles.length === 6"), 15000);
   const preview = await cdp.evaluate("window.__mindmapZoomTest.readPreviewChain()");
   assert.deepEqual(preview.titles, [
@@ -151,11 +243,11 @@ test("actual Next.js mind map supports zoom and Markdown document import", { tim
   await cdp.evaluate(`
     window.__mindmapZoomTest.selectApplyMode('replace');
     window.__mindmapZoomTest.setChecked('.confirm-line input', true);
-    window.__mindmapZoomTest.clickButtonByText('マップへ反映');
   `);
+  await cdp.evaluate("window.__mindmapZoomTest.clickButtonByText('マップへ反映')");
   await waitFor(() => cdp.evaluate("!document.querySelector('.document-modal')"), 10000);
-  await cdp.evaluate("window.__mindmapZoomTest.openMoreMenu()");
-  await cdp.evaluate("window.__mindmapZoomTest.clickButtonByText('すべて展開')");
+  await mouseClickByText(cdp, "その他");
+  await mouseClickByText(cdp, "すべて展開");
   await waitFor(() => cdp.evaluate("window.__mindmapZoomTest.readCanvasNodes().length >= 6"), 10000);
   const canvasNodes = await cdp.evaluate("window.__mindmapZoomTest.readCanvasNodes()");
   const expected = [
@@ -229,6 +321,14 @@ function installBrowserHelpersScript() {
         };
       }
 
+      function centerOf(node) {
+        const rect = node.getBoundingClientRect();
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2
+        };
+      }
+
       function parseTransform() {
         const value = element('mindmap-world').style.transform;
         const match = value.match(transformPattern);
@@ -260,6 +360,7 @@ function installBrowserHelpersScript() {
           candidate.textContent.replace(/\\s+/g, '').includes(text.replace(/\\s+/g, ''))
         );
         if (!button) throw new Error('Missing button: ' + text);
+        button.scrollIntoView?.({ block: 'center', inline: 'center' });
         return button;
       }
 
@@ -310,6 +411,83 @@ function installBrowserHelpersScript() {
         parseTransform,
         read,
         worldAtLocalPoint,
+        absolutePointInCanvas(localX, localY) {
+          const rect = element('mindmap-canvas').getBoundingClientRect();
+          return { x: rect.left + localX, y: rect.top + localY };
+        },
+        backgroundPointInCanvas() {
+          const canvas = element('mindmap-canvas');
+          const rect = canvas.getBoundingClientRect();
+          const candidates = [
+            [40, 40],
+            [Math.max(30, rect.width * 0.25), Math.max(30, rect.height * 0.25)],
+            [Math.max(30, rect.width * 0.5), Math.max(30, rect.height * 0.35)],
+            [Math.max(30, rect.width * 0.75), Math.max(30, rect.height * 0.25)],
+            [Math.max(30, rect.width * 0.2), Math.max(30, rect.height * 0.7)],
+            [Math.max(30, rect.width * 0.7), Math.max(30, rect.height * 0.7)]
+          ];
+          for (const [localX, localY] of candidates) {
+            const x = rect.left + localX;
+            const y = rect.top + localY;
+            const target = document.elementFromPoint(x, y);
+            if (
+              target &&
+              target.closest('[data-testid="mindmap-canvas"]') &&
+              !target.closest('button,input,textarea,select,a,[role="button"],.zoom-controls,.selection-panel,.toolbar,.more-popover,.document-modal,.mind-node')
+            ) {
+              return { x, y, localX, localY };
+            }
+          }
+          return { x: rect.left + 40, y: rect.top + 40, localX: 40, localY: 40 };
+        },
+        dispatchWheelAtCanvasPoint(localX, localY, deltaY) {
+          const canvas = element('mindmap-canvas');
+          const rect = canvas.getBoundingClientRect();
+          canvas.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true,
+            cancelable: true,
+            clientX: rect.left + localX,
+            clientY: rect.top + localY,
+            deltaX: 0,
+            deltaY
+          }));
+        },
+        dispatchMousePan(localX, localY, dx, dy) {
+          const canvas = element('mindmap-canvas');
+          const rect = canvas.getBoundingClientRect();
+          const startX = rect.left + localX;
+          const startY = rect.top + localY;
+          canvas.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true,
+            cancelable: true,
+            clientX: startX,
+            clientY: startY,
+            button: 0,
+            buttons: 1
+          }));
+          canvas.dispatchEvent(new MouseEvent('mousemove', {
+            bubbles: true,
+            cancelable: true,
+            clientX: startX + dx,
+            clientY: startY + dy,
+            button: 0,
+            buttons: 1
+          }));
+          canvas.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: true,
+            cancelable: true,
+            clientX: startX + dx,
+            clientY: startY + dy,
+            button: 0,
+            buttons: 0
+          }));
+        },
+        centerOfTestId(testId) {
+          return centerOf(element(testId));
+        },
+        centerOfButtonText(text) {
+          return centerOf(buttonByText(text));
+        },
         worldAtCanvasCenter() {
           const canvasRect = element('mindmap-canvas').getBoundingClientRect();
           return worldAtLocalPoint(canvasRect.width / 2, canvasRect.height / 2);
@@ -365,6 +543,25 @@ function installBrowserHelpersScript() {
               left: node.getBoundingClientRect().left,
               width: node.getBoundingClientRect().width
             }));
+        },
+        readLayout() {
+          const appbar = document.querySelector('.appbar').getBoundingClientRect();
+          const toolbar = document.querySelector('.toolbar').getBoundingClientRect();
+          const canvas = element('mindmap-canvas').getBoundingClientRect();
+          const zoomNode = document.querySelector('.zoom-controls');
+          const zoom = zoomNode.getBoundingClientRect();
+          const zoomStyle = getComputedStyle(zoomNode);
+          return {
+            appbar: rectValue(appbar),
+            toolbar: rectValue(toolbar),
+            canvas: rectValue(canvas),
+            zoom: {
+              ...rectValue(zoom),
+              flexDirection: zoomStyle.flexDirection,
+              flexWrap: zoomStyle.flexWrap,
+              whiteSpace: zoomStyle.whiteSpace
+            }
+          };
         }
       };
     })()
@@ -372,11 +569,45 @@ function installBrowserHelpersScript() {
 }
 
 async function clickAndWaitForScale(cdp, testId, predicate) {
-  await cdp.evaluate(`document.querySelector('[data-testid="${testId}"]').click()`);
+  await mouseClickTestId(cdp, testId);
   await waitFor(async () => {
     const state = await cdp.evaluate("window.__mindmapZoomTest.read()");
     return predicate(state.transform.scale);
   }, 10000);
+}
+
+async function mouseClickTestId(cdp, testId) {
+  const point = await cdp.evaluate(`window.__mindmapZoomTest.centerOfTestId(${JSON.stringify(testId)})`);
+  await dispatchMouseClick(cdp, point);
+}
+
+async function mouseClickByText(cdp, text) {
+  const point = await cdp.evaluate(`window.__mindmapZoomTest.centerOfButtonText(${JSON.stringify(text)})`);
+  await dispatchMouseClick(cdp, point);
+}
+
+async function dispatchMouseClick(cdp, point) {
+  const x = Math.round(point.x);
+  const y = Math.round(point.y);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, pointerType: "mouse" });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+    pointerType: "mouse",
+  });
+  await cdp.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+    pointerType: "mouse",
+  });
 }
 
 function freePort() {

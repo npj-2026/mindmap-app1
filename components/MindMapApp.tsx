@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent } from "react";
 import { createClient } from "@liveblocks/client";
 import { getYjsProviderForRoom } from "@liveblocks/yjs";
 import * as Y from "yjs";
@@ -109,6 +109,7 @@ import {
   shadowCss,
 } from "@/lib/styleRuntime";
 import {
+  MAX_ZOOM,
   MIN_ZOOM,
   ZOOM_STEP,
   calculateExportBounds,
@@ -179,6 +180,8 @@ const initialSnapshot: MindMapSnapshot = {
 
 const DEFAULT_BRANCH_COLOR = "#38bdf8";
 const RECENT_BRANCH_COLORS_KEY = "mindmap:recent-branch-colors";
+const INTERACTIVE_CANVAS_SELECTOR =
+  "button,input,textarea,select,a,[role='button'],.zoom-controls,.selection-panel,.toolbar,.more-popover,.document-modal";
 
 export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMapAppProps) {
   const isTestMode = Boolean(testSnapshot);
@@ -1194,6 +1197,11 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
   }, [transform.scale, transform.x, transform.y]);
 
   const startPan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest(INTERACTIVE_CANVAS_SELECTOR)) {
+      return;
+    }
+
     activePointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
     if (activePointersRef.current.size >= 2) {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1213,6 +1221,21 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
       startY: transform.y,
     };
   }, [startPinch, transform.x, transform.y]);
+
+  const startMousePan = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || panRef.current) return;
+    const target = event.target as HTMLElement;
+    if (target.closest(`${INTERACTIVE_CANVAS_SELECTOR},.mind-node`)) {
+      return;
+    }
+    panRef.current = {
+      pointerId: -1,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: transform.x,
+      startY: transform.y,
+    };
+  }, [transform.x, transform.y]);
 
   const movePan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (activePointersRef.current.has(event.pointerId)) {
@@ -1242,12 +1265,28 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
     }));
   }, []);
 
+  const moveMousePan = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    const pan = panRef.current;
+    if (!pan || !(event.buttons & 1)) return;
+    setTransform((current) => ({
+      ...current,
+      x: pan.startX + event.clientX - pan.startClientX,
+      y: pan.startY + event.clientY - pan.startClientY,
+    }));
+  }, []);
+
   const endPan = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     activePointersRef.current.delete(event.pointerId);
     if (activePointersRef.current.size < 2) {
       pinchRef.current = null;
     }
     if (panRef.current?.pointerId === event.pointerId) {
+      panRef.current = null;
+    }
+  }, []);
+
+  const endMousePan = useCallback(() => {
+    if (panRef.current) {
       panRef.current = null;
     }
   }, []);
@@ -1729,6 +1768,10 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
           }}
           onPointerUp={endPan}
           onPointerCancel={cancelCanvasInteraction}
+          onMouseDown={startMousePan}
+          onMouseMove={moveMousePan}
+          onMouseUp={endMousePan}
+          onMouseLeave={endMousePan}
         >
           {!isSynced ? (
             <div className="loading-overlay">
@@ -1907,17 +1950,44 @@ export function MindMapApp({ roomId, token, initialMode, testSnapshot }: MindMap
               ))}
           </div>
 
-          <div className="zoom-controls">
-            <button type="button" data-testid="zoom-out" onClick={() => zoomBy(-ZOOM_STEP)} aria-label="縮小">
+          <div
+            className="zoom-controls"
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerMove={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              data-testid="zoom-out"
+              onClick={() => zoomBy(-ZOOM_STEP)}
+              disabled={transform.scale <= MIN_ZOOM}
+              aria-label="縮小"
+              title="縮小"
+            >
               <ZoomOut size={17} />
             </button>
-            <button type="button" className="zoom-percent" data-testid="zoom-reset" onClick={resetZoom} aria-label="拡大率を100%に戻す">
+            <button
+              type="button"
+              className="zoom-percent"
+              data-testid="zoom-reset"
+              onClick={resetZoom}
+              aria-label="拡大率を100%に戻す"
+              title="100%に戻す"
+            >
               {Math.round(transform.scale * 100)}%
             </button>
-            <button type="button" data-testid="zoom-in" onClick={() => zoomBy(ZOOM_STEP)} aria-label="拡大">
+            <button
+              type="button"
+              data-testid="zoom-in"
+              onClick={() => zoomBy(ZOOM_STEP)}
+              disabled={transform.scale >= MAX_ZOOM}
+              aria-label="拡大"
+              title="拡大"
+            >
               <ZoomIn size={17} />
             </button>
-            <button type="button" data-testid="zoom-fit" onClick={fitVisibleNodes} aria-label="全体を表示">
+            <button type="button" data-testid="zoom-fit" onClick={fitVisibleNodes} aria-label="全体を表示" title="全体を表示">
               <Maximize size={17} />
               全体
             </button>

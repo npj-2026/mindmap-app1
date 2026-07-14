@@ -445,7 +445,7 @@ a {
 .mindmap-shell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 340px;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg);
 }
@@ -549,9 +549,10 @@ a {
 
 .workspace {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: 52px 56px minmax(0, 1fr);
   min-width: 0;
-  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .appbar,
@@ -559,22 +560,32 @@ a {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 14px;
+  min-height: 0;
+  padding: 6px 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 
+.appbar {
+  height: 52px;
+  overflow: hidden;
+}
+
 .title-stack {
   display: grid;
+  align-content: center;
   min-width: 220px;
   flex: 1;
+  gap: 0;
 }
 
 .map-title {
   width: min(440px, 100%);
+  height: 28px;
   border-color: transparent;
+  border-radius: 8px;
   padding-left: 0;
-  font-size: 1.14rem;
+  font-size: 1rem;
   font-weight: 800;
   background: transparent;
 }
@@ -584,7 +595,8 @@ a {
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.74rem;
+  line-height: 1.2;
 }
 
 .status-dot {
@@ -633,8 +645,10 @@ a {
 }
 
 .toolbar {
+  height: 56px;
   gap: 8px;
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .tool-group {
@@ -669,6 +683,8 @@ a {
 
 .canvas {
   position: relative;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
   background:
     linear-gradient(rgba(47, 128, 237, 0.055) 1px, transparent 1px),
@@ -824,15 +840,12 @@ a {
 .zoom-controls,
 .selection-panel {
   position: absolute;
-  bottom: 16px;
   display: flex;
   align-items: center;
-  gap: 8px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   box-shadow: var(--shadow);
-  padding: 8px;
 }
 
 :root[data-theme="dark"] .zoom-controls,
@@ -841,15 +854,51 @@ a {
 }
 
 .zoom-controls {
-  right: 16px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 100;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 4px;
+  height: 44px;
+  max-height: 44px;
+  padding: 4px;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.zoom-controls button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 10px;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.zoom-controls button:hover:not(:disabled) {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.zoom-controls button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .zoom-percent {
-  min-width: 64px;
+  min-width: 58px;
 }
 
 .selection-panel {
   left: 16px;
+  bottom: 16px;
+  gap: 8px;
+  padding: 8px;
   max-width: min(520px, calc(100% - 190px));
 }
 
@@ -1798,6 +1847,8 @@ a {
 
   .appbar {
     gap: 8px;
+    height: 52px;
+    padding: 6px 10px;
   }
 
   .map-title {
@@ -1809,11 +1860,12 @@ a {
   }
 
   .toolbar {
-    padding: 10px;
+    height: 56px;
+    padding: 6px 10px;
   }
 
   .toolbar button {
-    min-height: 44px;
+    min-height: 36px;
   }
 
   .tool-group:nth-child(3) button span {
@@ -1830,7 +1882,12 @@ a {
 
   .zoom-controls {
     right: 10px;
-    bottom: 14px;
+    bottom: 12px;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    height: 44px;
+    max-height: 44px;
+    padding: 4px;
   }
 
   .guide-card {
@@ -1842,7 +1899,8 @@ a {
 
 @media (max-width: 640px) {
   .appbar {
-    padding: 10px;
+    height: 52px;
+    padding: 6px 8px;
   }
 
   .share-button,
@@ -1851,6 +1909,8 @@ a {
   }
 
   .toolbar {
+    height: 56px;
+    padding: 6px 8px;
     flex-wrap: nowrap;
   }
 
